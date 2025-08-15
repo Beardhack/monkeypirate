@@ -27,7 +27,7 @@ npm run dev
 Dev shell: public/dev.html
 Live prototype (Pages): root index.html (unchanged during M0)
 
-Controls
+## Controls
 Move: WASD / Arrow keys
 
 Gather: G
