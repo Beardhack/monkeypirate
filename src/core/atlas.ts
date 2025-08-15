@@ -1,69 +1,80 @@
-import { Assets, Texture, Rectangle } from "pixi.js";
+// Tiny atlas loader for the custom { tileSize, sheets: { "file.png": { name:[col,row] } } } format.
+// Produces per-name PIXI.Textures from the sheet images.
+// Uses import.meta.env.BASE_URL to resolve /public/assets paths.
 
-/**
- * SimpleAtlas loader for our art pack format:
- * {
- *   "tileSize": 16,
- *   "sheets": {
- *     "tiles.png": { "sand":[1,0], "jungle":[2,0], ... },
- *     "props.png": { "palm":[0,0], "rocks":[3,0], ... },
- *     ...
- *   }
- * }
- */
-export class SimpleAtlas {
-  tileSize = 16;
-  private baseTextures = new Map<string, Texture>();
-  private textures = new Map<string, Texture>();
-  private baseUrl = (import.meta as any).env?.BASE_URL || "/";
+import { Assets, BaseTexture, Rectangle, Texture } from 'pixi.js';
 
-  private asset(path: string) {
-    const base = this.baseUrl.endsWith("/") ? this.baseUrl.slice(0, -1) : this.baseUrl;
-    const p = path.startsWith("/") ? path : `/${path}`;
-    return `${base}${p}`;
+export type AtlasMap = {
+  tileSize: number;
+  sheets: Record<string, Record<string, [number, number]>>;
+};
+
+function withTrailingSlash(s: string) {
+  return s.endsWith('/') ? s : s + '/';
+}
+
+export class Atlas {
+  readonly tileSize: number;
+  private textures: Map<string, Texture> = new Map();
+
+  private constructor(tileSize: number) {
+    this.tileSize = tileSize;
   }
 
-  async load(jsonPath = "/assets/atlas_map.json") {
-    const res = await fetch(this.asset(jsonPath), { cache: "no-store" });
-    if (!res.ok) throw new Error(`Atlas load failed: ${jsonPath}`);
-    const data = await res.json();
-    this.tileSize = data.tileSize || 16;
+  /**
+   * Load atlas_map.json and all sheet pngs under `${base}assets/`.
+   * @param base import.meta.env.BASE_URL (or compatible)
+   */
+  static async load(base: string): Promise<Atlas> {
+    const BASE = withTrailingSlash(base || '/');
+    const assetsBase = `${BASE}assets/`;
 
-    const sheets = data.sheets || {};
-    for (const sheetName of Object.keys(sheets)) {
-      const baseTex = await Assets.load(this.asset(`/assets/${sheetName}`));
-      // best-effort nearest-neighbor (v8)
-      try { baseTex.source.scaleMode = "nearest" as any; } catch {}
-      this.baseTextures.set(sheetName, baseTex);
+    // Load atlas_map.json
+    const atlasUrl = `${assetsBase}atlas_map.json`;
+    const res = await fetch(atlasUrl);
+    if (!res.ok) {
+      throw new Error(`Failed to load atlas_map.json at ${atlasUrl}`);
+    }
+    const data = (await res.json()) as AtlasMap;
 
-      const entries = sheets[sheetName] || {};
-      for (const [name, coord] of Object.entries(entries)) {
-        const [col, row] = coord as [number, number];
-        const frame = new Rectangle(
-          col * this.tileSize,
-          row * this.tileSize,
-          this.tileSize,
-          this.tileSize
-        );
-        const tex = new Texture({ source: baseTex.source, frame });
-        // Register by short key ("sand") and qualified ("tiles.png/sand")
-        const qualified = `${sheetName}/${name}`;
-        if (!this.textures.has(name)) this.textures.set(name, tex);
-        this.textures.set(qualified, tex);
+    const atlas = new Atlas(data.tileSize || 16);
+
+    // Load each sheet and slice textures
+    const sheetEntries = Object.entries(data.sheets || {});
+    for (const [fileName, nameMap] of sheetEntries) {
+      const sheetUrl = `${assetsBase}${fileName}`;
+
+      // In Pixi v7 Assets.load returns a Texture; in v8, also a Texture.
+      // We'll derive the BaseTexture from it for sub-rect slicing.
+      const sheetTex = (await Assets.load(sheetUrl)) as Texture;
+      const baseTex: BaseTexture =
+        (sheetTex && (sheetTex.baseTexture as BaseTexture)) ||
+        (Texture.from(sheetUrl).baseTexture as BaseTexture);
+
+      for (const [name, [col, row]] of Object.entries(nameMap)) {
+        const x = col * atlas.tileSize;
+        const y = row * atlas.tileSize;
+        const frame = new Rectangle(x, y, atlas.tileSize, atlas.tileSize);
+
+        // v7-compatible constructor; also accepted by v8 types.
+        const sub = new Texture(baseTex, frame);
+        atlas.textures.set(name, sub);
       }
     }
+
+    return atlas;
+  }
+
+  has(name: string): boolean {
+    return this.textures.has(name);
   }
 
   get(name: string): Texture | null {
-    return this.textures.get(name) || null;
+    return this.textures.get(name) ?? null;
   }
 
-  /** Try a list of names, returning the first that exists. */
-  try(...names: string[]): Texture | null {
-    for (const n of names) {
-      const t = this.get(n);
-      if (t) return t;
-    }
-    return null;
+  /** For debugging/dev tools */
+  keys(): string[] {
+    return [...this.textures.keys()];
   }
 }
