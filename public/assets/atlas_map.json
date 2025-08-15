@@ -1,0 +1,167 @@
+{
+  "tileSize": 16,
+  "sheets": {
+    "tiles.png": {
+      "water": [
+        0,
+        0
+      ],
+      "sand": [
+        1,
+        0
+      ],
+      "jungle": [
+        2,
+        0
+      ],
+      "rocky": [
+        3,
+        0
+      ],
+      "shipwreck": [
+        4,
+        0
+      ],
+      "high": [
+        5,
+        0
+      ],
+      "sand_alt": [
+        6,
+        0
+      ],
+      "jungle_alt": [
+        7,
+        0
+      ],
+      "blank_0": [
+        0,
+        1
+      ],
+      "blank_1": [
+        1,
+        1
+      ],
+      "blank_2": [
+        2,
+        1
+      ],
+      "blank_3": [
+        3,
+        1
+      ],
+      "blank_4": [
+        4,
+        1
+      ],
+      "blank_5": [
+        5,
+        1
+      ],
+      "blank_6": [
+        6,
+        1
+      ],
+      "blank_7": [
+        7,
+        1
+      ]
+    },
+    "props.png": {
+      "palm": [
+        0,
+        0
+      ],
+      "banana": [
+        1,
+        0
+      ],
+      "vines": [
+        2,
+        0
+      ],
+      "rocks": [
+        3,
+        0
+      ],
+      "driftwood": [
+        4,
+        0
+      ],
+      "shells": [
+        5,
+        0
+      ],
+      "wreck": [
+        6,
+        0
+      ]
+    },
+    "structures.png": {
+      "campfire_off": [
+        0,
+        0
+      ],
+      "campfire_on": [
+        1,
+        0
+      ],
+      "signal_off": [
+        2,
+        0
+      ],
+      "signal_on": [
+        3,
+        0
+      ]
+    },
+    "characters.png": {
+      "monkey_down_0": [
+        0,
+        0
+      ],
+      "monkey_down_1": [
+        1,
+        0
+      ],
+      "monkey_right_0": [
+        2,
+        1
+      ],
+      "monkey_right_1": [
+        3,
+        1
+      ],
+      "monkey_up_0": [
+        4,
+        2
+      ],
+      "monkey_up_1": [
+        5,
+        2
+      ],
+      "monkey_left_0": [
+        6,
+        3
+      ],
+      "monkey_left_1": [
+        7,
+        3
+      ],
+      "crab_0": [
+        0,
+        4
+      ],
+      "crab_1": [
+        1,
+        4
+      ]
+    },
+    "ui.png": {
+      "heart": [
+        0,
+        0
+      ]
+    }
+  }
+}
