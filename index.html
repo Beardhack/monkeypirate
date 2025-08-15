@@ -1,170 +1,1404 @@
 <!DOCTYPE html>
+<!--
+  Monkey Pirate: Shipwrecked (Turn-Based)
+  ---------------------------------------------------------
+  README (short):
+  - Goal: Survive, craft, and build a Signal Fire after Day 3.
+  - Controls (rebindable in Help):
+      Movement: Arrow Keys or WASD
+      G: Gather / Interact (pick from tile / talk to campfire etc.)
+      E: Inventory
+      C: Crafting
+      Space: Wait a turn
+      Enter: Confirm (contextual)
+      F1: Toggle Debug panel
+      Mouse: Click UI buttons and lists
+  - Turn-based: Every action advances the turn; world updates on turns only.
+  - Stats: Health ❤, Stamina ⚡, Hunger 🍗. Hunger drains per turn; eat to restore. Rest at a Campfire.
+  - Resources: coconuts, bananas, rocks, wood, vines, scrap, shells. Nodes have charges & respawn by turn timers.
+  - Tools: Stone Axe & Spear have durability. Rope & Pouch are craftables; Pouch increases carry slots.
+  - Biomes: Beach / Jungle / Shipwreck zone. Occasional tide event affects beach tiles.
+  - Win: Build a Signal Fire (after Day 3) on high ground and light it.
+  - Save/Load: Auto-saves every 20 turns and on exit. Manual Save/Load buttons. "New Run" lets you set a seed.
+  - Structure:
+      * Constants & Utilities (seeded RNG, helpers)
+      * State (player, map, entities, UI)
+      * Generation (map, resources, shipwreck)
+      * Systems (turn scheduler, AI, tides, crafting, inventory)
+      * Rendering (canvas tiles, HUD, tooltip, dirty redraw)
+      * Input (keyboard/mouse, rebindable)
+      * Persistence (localStorage)
+      * Debug & Help/Settings
+  - Art: Pure Canvas pixels/shapes; no external assets.
+  - Note: All updates are deterministic from the seed (mulberry32). Procedural generation is seed-stable.
+
+  Tweakable constants are marked in CONFIG. This is a single-file HTML; open in any modern browser.
+-->
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Monkey Pirate Game</title>
+  <meta charset="UTF-8" />
+  <title>Monkey Pirate: Shipwrecked (Turn-Based)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body {
-      background: linear-gradient(#86c4ff 0%, #c2ffb0 100%);
-      margin: 0;
-      font-family: 'Trebuchet MS', sans-serif;
-      overflow: hidden;
+    :root{
+      --bg:#0e0f12;
+      --panel:#151821;
+      --panel-2:#1c2230;
+      --text:#e8ecf1;
+      --muted:#9aa5b1;
+      --accent:#42c2ff;
+      --ok:#7ee787;
+      --warn:#ffcc66;
+      --bad:#ff6b6b;
+      --beach:#e8d7a5;
+      --jungle:#276f3b;
+      --jungle2:#1e5a30;
+      --water:#2b5ea7;
+      --rock:#807d7a;
+      --scrap:#7a8ea1;
+      --ship:#6f4f28;
+      --shell:#d7c7bf;
+      --high:#8c8769;
     }
-    #gameCanvas {
-      background: #c2ffb0;
-      border: 5px solid #775533;
-      display: block;
-      margin: 30px auto;
-      box-shadow: 0 0 24px #333;
+    *{box-sizing:border-box}
+    html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.3 system-ui,Segoe UI,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji"}
+    #root{display:grid;grid-template-columns:auto 320px;gap:10px;padding:10px}
+    #left{display:flex;flex-direction:column;gap:8px}
+    #topbar{display:flex;gap:8px}
+    button, .btn{
+      background:var(--panel);color:var(--text);border:1px solid #2b3245;border-radius:6px;
+      padding:8px 10px;cursor:pointer;transition:transform .05s ease, background .2s ease;
     }
-    #scoreboard {
-      text-align: center;
-      font-size: 1.4em;
-      font-weight: bold;
-      margin-top: 10px;
-      color: #4e2e11;
+    button:hover{background:var(--panel-2)}
+    button:active{transform:translateY(1px)}
+    #gameCanvas{background:#000;border:1px solid #2b3245;image-rendering:pixelated}
+    #hud{background:var(--panel);border:1px solid #2b3245;border-radius:8px;padding:8px;display:grid;grid-template-columns:1fr;gap:6px}
+    #stats{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .badge{display:inline-flex;align-items:center;gap:6px;background:var(--panel-2);padding:6px 8px;border-radius:6px}
+    .ico{font-weight:700;min-width:16px;text-align:center}
+    #log{background:var(--panel-2);border-radius:6px;min-height:72px;max-height:120px;overflow:auto;padding:6px;color:var(--muted)}
+    #toolTip{font-size:12px;color:var(--muted)}
+    #seedDisp{color:var(--muted)}
+    .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5)}
+    .win{display:flex}
+    .card{background:var(--panel);border:1px solid #2b3245;border-radius:10px;min-width:320px;max-width:720px;width:90%;max-height:80%;overflow:auto}
+    .card header{padding:10px;border-bottom:1px solid #2b3245;display:flex;justify-content:space-between;align-items:center}
+    .card .body{padding:10px}
+    .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+    .list{display:grid;gap:6px}
+    .row{display:flex;gap:8px;align-items:center;justify-content:space-between}
+    .invSlot{border:1px dashed #3a425b;border-radius:6px;padding:6px;display:flex;justify-content:space-between;align-items:center}
+    .invSlot span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .craftItem{border:1px solid #2b3245;border-radius:6px;padding:6px;display:grid;gap:4px}
+    .muted{color:var(--muted)}
+    .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+    .kbd{background:#232a3b;border:1px solid #39425a;border-bottom-width:3px;border-radius:4px;padding:0 4px;font-family:monospace}
+    #debugPanel{position:fixed;bottom:10px;left:10px;display:none;background:var(--panel);border:1px solid #2b3245;border-radius:8px;padding:8px;min-width:320px;max-width:400px;z-index:5}
+    input[type="text"], input[type="number"], select{
+      background:var(--panel-2);color:var(--text);border:1px solid #2b3245;border-radius:6px;padding:6px;width:100%
     }
-    #instructions {
-      text-align: center;
-      margin-top: 10px;
-      color: #2d1a09;
-    }
-    #gameOverScreen {
-      position: absolute;
-      top: 70px;
-      left: 0;
-      width: 100vw;
-      height: 100vh;
-      text-align: center;
-      background: rgba(0,0,0,0.6);
-      display: none;
-      color: #fff;
-      font-size: 2em;
-      z-index: 10;
-    }
-    #playAgainBtn {
-      padding: 12px 36px;
-      font-size: 1.2em;
-      background: #ffe08d;
-      border: 2px solid #775533;
-      border-radius: 8px;
-      cursor: pointer;
-      margin-top: 16px;
-    }
-    #playAgainBtn:hover {
-      background: #ffd257;
-    }
+    .sectionTitle{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-top:6px}
+    #miniHelp{font-size:12px;color:var(--muted)}
+    .hidden{display:none}
+    /* Scrollbars */
+    ::-webkit-scrollbar{height:10px;width:10px}
+    ::-webkit-scrollbar-thumb{background:#3a425b;border-radius:6px}
+    ::-webkit-scrollbar-track{background:#12141a}
   </style>
 </head>
 <body>
-  <div id="scoreboard">Score: <span id="score">0</span></div>
-  <div id="instructions">Press <b>Space</b> or <b>Tap</b> to jump!</div>
-  <canvas id="gameCanvas" width="700" height="400"></canvas>
-  <div id="gameOverScreen">
-    <div id="gameOverMsg"></div>
-    <button id="playAgainBtn">Play Again</button>
+  <div id="root">
+    <div id="left">
+      <div id="topbar">
+        <button id="btnNew">New Run</button>
+        <button id="btnSave">Save Now</button>
+        <button id="btnLoad">Load</button>
+        <button id="btnMute">Mute</button>
+        <button id="btnHelp">Help</button>
+      </div>
+      <canvas id="gameCanvas" width="800" height="600" aria-label="Game canvas"></canvas>
+      <div id="hud">
+        <div id="stats">
+          <div class="badge" title="Health"><span class="ico">❤</span><span id="statHealth">10</span></div>
+          <div class="badge" title="Stamina"><span class="ico">⚡</span><span id="statStam">10</span></div>
+          <div class="badge" title="Hunger"><span class="ico">🍗</span><span id="statHunger">10</span></div>
+          <div class="badge" title="Turn"><span class="ico">⏱</span><span id="statTurn">0</span></div>
+          <div class="badge" title="Day"><span class="ico">📅</span><span id="statDay">1</span></div>
+          <div class="badge" title="Seed"><span class="ico">🌱</span><span id="seedDisp">-</span></div>
+        </div>
+        <div id="toolTip">Tip: Move with WASD/Arrows. Press <span class="kbd">G</span> to gather. <span class="kbd">E</span> inventory, <span class="kbd">C</span> crafting, <span class="kbd">Space</span> wait.</div>
+        <div id="log" aria-live="polite"></div>
+        <div id="miniHelp">Core loop: Explore → Gather → Craft → Rest → Survive → Build & light the Signal Fire after Day 3 to win.</div>
+      </div>
+    </div>
+    <div id="right">
+      <!-- Side panel could be extended in future; keeping minimal for now -->
+    </div>
   </div>
+
+  <!-- Inventory Modal -->
+  <div class="modal" id="invModal" role="dialog" aria-modal="true" aria-label="Inventory">
+    <div class="card">
+      <header><strong>Inventory</strong><button onclick="UI.closeModal('invModal')">Close</button></header>
+      <div class="body">
+        <div class="row"><div>Slots: <span id="invSlots"></span></div><div class="muted">Tip: Click food to Eat.</div></div>
+        <div id="invList" class="list"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Crafting Modal -->
+  <div class="modal" id="craftModal" role="dialog" aria-modal="true" aria-label="Crafting">
+    <div class="card">
+      <header><strong>Crafting</strong><button onclick="UI.closeModal('craftModal')">Close</button></header>
+      <div class="body">
+        <div class="list" id="craftList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Help/Settings Modal -->
+  <div class="modal" id="helpModal" role="dialog" aria-modal="true" aria-label="Help and Settings">
+    <div class="card">
+      <header><strong>Help & Settings</strong><button onclick="UI.closeModal('helpModal')">Close</button></header>
+      <div class="body">
+        <div class="grid2">
+          <div>
+            <div class="sectionTitle">Tutorial</div>
+            <div class="list">
+              <div>• <b>Turn-based:</b> each action advances time. Plan your moves.</div>
+              <div>• Gather from the tile you stand on with <span class="kbd">G</span>.</div>
+              <div>• Use <b>Campfire</b> to Rest (restore stamina) and Cook food.</div>
+              <div>• Craft <b>Stone Axe</b> to boost wood gathering; can fell palms.</div>
+              <div>• Craft <b>Spear</b> to deter crabs (they nip if adjacent).</div>
+              <div>• After Day 3, build a <b>Signal Fire</b> on high ground and light it.</div>
+            </div>
+            <div class="sectionTitle">Accessibility</div>
+            <label><input type="checkbox" id="chkShake"> Subtle screen shake (off by default)</label><br/>
+            <label><input type="checkbox" id="chkMute"> Mute audio</label>
+          </div>
+          <div>
+            <div class="sectionTitle">Rebind Keys</div>
+            <div id="bindList" class="list"></div>
+            <button id="bindReset">Reset Defaults</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Debug Panel (F1) -->
+  <div id="debugPanel" aria-label="Debug Panel">
+    <div class="row"><strong>Debug</strong><button id="dbgClose">Hide (F1)</button></div>
+    <div class="sectionTitle">World</div>
+    <div class="row"><label><input type="checkbox" id="dbgReveal"> Reveal map (no fog)</label></div>
+    <div class="row"><label>Set Seed</label><input type="text" id="dbgSeed"><button id="dbgApplySeed">Apply</button></div>
+    <div class="row"><button id="dbgAdvance10">Advance +10 turns</button><button id="dbgAdvance100">+100</button></div>
+    <div class="row"><button id="dbgSpawnCrab">Spawn Crab</button><button id="dbgGiveFood">Give 3 Bananas</button></div>
+    <div class="row"><button id="dbgGiveKit">Give Tools Kit</button><button id="dbgGiveAll">Give Lots</button></div>
+  </div>
+
   <script>
-    // Canvas setup
-    const canvas = document.getElementById('gameCanvas');
-    const ctx = canvas.getContext('2d');
-    const w = canvas.width, h = canvas.height;
+  ;(() => {
+    "use strict";
 
-    // Game variables
-    let score = 0, highScore = 0;
-    let gameRunning = false;
-    let gravity = 0.7, jumpStrength = 11;
-    let pirateX = 80, pirateY = h - 90, pirateW = 48, pirateH = 56;
-    let pirateVelY = 0, isJumping = false;
-    let obstacles = [];
-    let bananas = [];
-    let groundY = h - 60;
-    let spawnTimer = 0, bananaTimer = 0;
-    let pirateSpriteFrame = 0;
+    /* ===========================
+       CONFIG & CONSTANTS
+    ============================ */
+    const CONFIG = {
+      VERSION: "1.0.0",
+      SAVE_KEY: "mp_shipwrecked_save_v1",
+      AUTOSAVE_EVERY: 20,           // turns
+      TILE_SIZE: 20,                // px (16–24 OK)
+      MAP_W: 64, MAP_H: 64,         // tile dimensions (top-down grid)
+      VIEW_W: 40, VIEW_H: 30,       // tiles visible on canvas
+      BASE_SLOTS: 15,
+      POUCH_BONUS_SLOTS: 5,
+      MAX_STACK: 20,
+      HUNGER_MAX: 100,
+      STAM_MAX: 100,
+      HEALTH_MAX: 10,
+      HUNGER_DRAIN_PER_TURN: 1,     // drain per turn
+      STAM_MOVE_COST: 1,
+      STAM_GATHER_COST: 2,
+      EAT_VALUES: { banana: 18, coconut: 14, "banana_cooked": 26, "coconut_cooked": 22 },
+      TOOL_DURABILITY: { "Stone Axe": 30, "Spear": 30 },
+      DAY_TURNS: 120,               // how many turns per day
+      CRAB_MOVE_PERIOD: 2,          // moves every 2 turns
+      CRAB_DAMAGE: 1,
+      TIDE_PERIOD: 50,              // tide triggers every N turns on average
+      TIDE_VARIANCE: 20,            // +/- randomness
+      RESOURCE_RESPAWN_TURNS: {     // per-node respawn window
+        palm: 80, banana: 70, vines: 60, rock: 90, driftwood: 60, shell: 70, wreck: 120
+      },
+      SIGNAL_FIRE_REQ: { wood: 10, scrap: 3, shells: 5 },
+      CAMPFIRE_REQ: { wood: 3, rocks: 4 },
+      AXE_REQ: { wood: 1, rock: 2, rope: 1 },
+      SPEAR_REQ: { wood: 1, rock: 1, rope: 1 },
+      ROPE_REQ: { vines: 2 },
+      POUCH_REQ: { vines: 2, scrap: 1 },
+      SCREEN_SHAKE_PX: 3,
+      COLORS: {
+        beach: getCSSVar('--beach'),
+        jungle: getCSSVar('--jungle'),
+        jungle2: getCSSVar('--jungle2'),
+        water: getCSSVar('--water'),
+        rock: getCSSVar('--rock'),
+        scrap: getCSSVar('--scrap'),
+        ship: getCSSVar('--ship'),
+        shell: getCSSVar('--shell'),
+        high: getCSSVar('--high'),
+      }
+    };
 
-    // Game assets: monkey pirate (simple pixel art)
-    function drawPirate(x, y, frame) {
-      // body
-      ctx.save();
-      ctx.translate(x, y);
-      ctx.scale(1, 1);
-
-      // Feet
-      ctx.fillStyle = "#775533";
-      ctx.fillRect(-15, 30, 12, 10);
-      ctx.fillRect(7, 30, 12, 10);
-
-      // Shirt
-      ctx.fillStyle = "#ffe08d";
-      ctx.fillRect(-15, -10, 34, 28);
-
-      // Sash
-      ctx.fillStyle = "#c52020";
-      ctx.fillRect(-15, 18, 34, 8);
-
-      // Head
-      ctx.beginPath();
-      ctx.arc(0, -20, 18, 0, Math.PI*2);
-      ctx.fillStyle = "#b4803a";
-      ctx.fill();
-
-      // Pirate hat
-      ctx.beginPath();
-      ctx.moveTo(-18, -33);
-      ctx.quadraticCurveTo(0, -52, 18, -33);
-      ctx.quadraticCurveTo(10, -25, -10, -28);
-      ctx.closePath();
-      ctx.fillStyle = "#222";
-      ctx.fill();
-      // Hat brim
-      ctx.fillStyle = "#ffe08d";
-      ctx.fillRect(-12, -34, 24, 6);
-      // Skull
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.arc(0, -37, 4, 0, Math.PI*2);
-      ctx.fill();
-
-      // Eyes
-      ctx.fillStyle = "#fff";
-      ctx.beginPath();
-      ctx.arc(-6, -22, 3, 0, Math.PI*2);
-      ctx.arc(6, -22, 3, 0, Math.PI*2);
-      ctx.fill();
-      ctx.fillStyle = "#222";
-      ctx.beginPath();
-      ctx.arc(-6, -22, 1.3, 0, Math.PI*2);
-      ctx.arc(6, -22, 1.3, 0, Math.PI*2);
-      ctx.fill();
-
-      // Smile
-      ctx.strokeStyle = "#222";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, -15, 6, 0.2, 0.9);
-      ctx.stroke();
-
-      // Hand waving (animation)
-      ctx.save();
-      ctx.rotate(frame % 2 === 0 ? 0.3 : -0.3);
-      ctx.fillStyle = "#b4803a";
-      ctx.fillRect(19, -10, 10, 30);
-      ctx.beginPath();
-      ctx.arc(24, 18, 7, 0, Math.PI*2);
-      ctx.fill();
-      ctx.restore();
-
-      // Left hand
-      ctx.fillStyle = "#b4803a";
-      ctx.fillRect(-29, -10, 10, 30);
-      ctx.beginPath();
-      ctx.arc(-24, 18, 7, 0, Math.PI*2);
-      ctx.fill();
-
-      ctx.restore();
+    function getCSSVar(name){
+      return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     }
 
-    // Draw ground
-    function drawGround() {
-      ctx.fillStyle = "#8bc85c";
-      ctx.fillRect(0, groundY, w, h-groundY
+    /* ===========================
+       SEEDED RNG (mulberry32)
+    ============================ */
+    function xmur3(str) {
+      let h = 1779033703 ^ str.length;
+      for (let i = 0; i < str.length; i++) {
+        h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+        h = (h << 13) | (h >>> 19);
+      }
+      return function () {
+        h = Math.imul(h ^ (h >>> 16), 2246822507);
+        h = Math.imul(h ^ (h >>> 13), 3266489909);
+        h ^= h >>> 16;
+        return h >>> 0;
+      };
+    }
+    function mulberry32(a) {
+      return function () {
+        let t = (a += 0x6D2B79F5);
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    let RNG = mulberry32(123456789);
+    function setSeed(seedStr) {
+      const seedGen = xmur3(String(seedStr));
+      const a = seedGen();
+      RNG = mulberry32(a);
+      state.seed = String(seedStr);
+      dirty.all = true;
+    }
+
+    function randi(min, max){ return Math.floor(RNG()*(max-min+1))+min; }
+    function randf(min, max){ return RNG()*(max-min)+min; }
+    function chance(p){ return RNG() < p; }
+    function pick(arr){ return arr[Math.floor(RNG()*arr.length)] }
+
+    /* ===========================
+       STATE
+    ============================ */
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    const state = {
+      seed: "island-0001",
+      turn: 0,
+      day: 1,
+      tideNext: 0,
+      player: {
+        x: 0, y: 0,
+        health: CONFIG.HEALTH_MAX,
+        stamina: CONFIG.STAM_MAX,
+        hunger: CONFIG.HUNGER_MAX,
+        inventory: [], // {id, qty, dur?}
+        maxSlots: CONFIG.BASE_SLOTS,
+        hasSeen: new Set(), // fog of war
+      },
+      map: { w: CONFIG.MAP_W, h: CONFIG.MAP_H, tiles: [], fog: [] },
+      entities: [], // crabs, structures, etc.
+      structures: [], // {type:'campfire'|'signal', x,y, lit?, used?}
+      gameFlags: { won:false, dead:false, canWin:false },
+      settings: { mute:false, shake:false, reveal:false },
+      input: {
+        bindings: {
+          up:["ArrowUp","KeyW"], down:["ArrowDown","KeyS"], left:["ArrowLeft","KeyA"], right:["ArrowRight","KeyD"],
+          gather:["KeyG"], inventory:["KeyE"], craft:["KeyC"], wait:["Space"], confirm:["Enter"], debug:["F1"]
+        }
+      }
+    };
+
+    // Dirty flags for redraw efficiency
+    const dirty = { all:true, hud:true, log:true };
+
+    // Log
+    const $log = document.getElementById('log');
+    function log(msg, cls="") {
+      const div = document.createElement('div');
+      if (cls) div.className = cls;
+      div.textContent = msg;
+      $log.appendChild(div);
+      $log.scrollTop = $log.scrollHeight;
+      dirty.log = true;
+    }
+
+    /* ===========================
+       AUDIO (WebAudio simple beeps)
+    ============================ */
+    let audioCtx = null;
+    function ensureAudio() {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new AC();
+      }
+    }
+    function sfx(freq=440, dur=0.05, type='square', vol=0.05) {
+      if (state.settings.mute) return;
+      ensureAudio();
+      const o = audioCtx.createOscillator();
+      const g = audioCtx.createGain();
+      o.type = type; o.frequency.value = freq;
+      g.gain.value = vol;
+      o.connect(g).connect(audioCtx.destination);
+      o.start();
+      o.stop(audioCtx.currentTime + dur);
+    }
+
+    /* ===========================
+       UI HELPERS
+    ============================ */
+    const UI = {
+      openModal(id){ document.getElementById(id).classList.add('win'); },
+      closeModal(id){ document.getElementById(id).classList.remove('win'); },
+      redrawBindings(){
+        const wrap = document.getElementById('bindList'); wrap.innerHTML = "";
+        for (const [action, codes] of Object.entries(state.input.bindings)) {
+          const row = document.createElement('div'); row.className = 'row';
+          const label = document.createElement('div'); label.textContent = action;
+          const inp = document.createElement('input'); inp.type='text';
+          inp.value = codes.join(","); inp.title="Comma-separated KeyboardEvent.code values";
+          inp.onchange = () => {
+            const updated = inp.value.split(',').map(s=>s.trim()).filter(Boolean);
+            if (updated.length) state.input.bindings[action] = updated;
+            saveSettings();
+          }
+          row.append(label, inp);
+          wrap.append(row);
+        }
+      },
+      toastTipOnce(key, msg){
+        if (localStorage.getItem("tip_"+key)) return;
+        localStorage.setItem("tip_"+key,"1");
+        log(msg, "muted");
+      }
+    };
+
+    // Buttons
+    document.getElementById('btnHelp').onclick = () => {
+      document.getElementById('chkMute').checked = state.settings.mute;
+      document.getElementById('chkShake').checked = state.settings.shake;
+      UI.redrawBindings();
+      UI.openModal('helpModal');
+    };
+    document.getElementById('chkMute').onchange = (e) => {
+      state.settings.mute = e.target.checked; saveSettings();
+    };
+    document.getElementById('chkShake').onchange = (e) => {
+      state.settings.shake = e.target.checked; saveSettings();
+    };
+    document.getElementById('bindReset').onclick = () => {
+      state.input.bindings = {
+        up:["ArrowUp","KeyW"], down:["ArrowDown","KeyS"], left:["ArrowLeft","KeyA"], right:["ArrowRight","KeyD"],
+        gather:["KeyG"], inventory:["KeyE"], craft:["KeyC"], wait:["Space"], confirm:["Enter"], debug:["F1"]
+      };
+      UI.redrawBindings(); saveSettings();
+    };
+
+    // Topbar buttons
+    document.getElementById('btnMute').onclick = () => {
+      state.settings.mute = !state.settings.mute; saveSettings(); updateTopbar();
+    };
+    function updateTopbar(){
+      document.getElementById('btnMute').textContent = state.settings.mute ? "Unmute" : "Mute";
+    }
+    document.getElementById('btnSave').onclick = () => { saveGame(); sfx(700, .06, 'sine'); log("Saved."); };
+    document.getElementById('btnLoad').onclick = () => { if (loadGame()) { log("Loaded save."); } else { log("No save found.", "warn"); } };
+    document.getElementById('btnNew').onclick = () => {
+      const seed = prompt("Enter seed (any text or number). Same seed = same island:", state.seed || "island-0001");
+      if (seed===null) return;
+      newRun(String(seed).trim() || "island-0001");
+    };
+
+    /* ===========================
+       KEY INPUT
+    ============================ */
+    const held = {};
+    window.addEventListener('keydown', (e) => {
+      // prevent arrow key scroll when game focused
+      if (["ArrowUp","ArrowDown","ArrowLeft","ArrowRight","Space"].includes(e.code)) e.preventDefault();
+      held[e.code] = true;
+
+      // Debug toggle
+      if (matches('debug', e.code)) {
+        e.preventDefault();
+        toggleDebug();
+        return;
+      }
+
+      if (UIAnyOpen()) return; // don't process game actions when modal open
+
+      if (matches('inventory', e.code)) { e.preventDefault(); openInventory(); return; }
+      if (matches('craft', e.code)) { e.preventDefault(); openCrafting(); return; }
+      if (matches('wait', e.code)) { e.preventDefault(); doWait(); return; }
+      if (matches('gather', e.code)) { e.preventDefault(); doGatherOrInteract(); return; }
+      if (matches('confirm', e.code)) { e.preventDefault(); doConfirm(); return; }
+
+      let dx=0, dy=0;
+      if (matches('up', e.code)) dy=-1;
+      else if (matches('down', e.code)) dy=1;
+      else if (matches('left', e.code)) dx=-1;
+      else if (matches('right', e.code)) dx=1;
+
+      if (dx||dy) { e.preventDefault(); tryMove(dx,dy); }
+    });
+    window.addEventListener('keyup', (e)=> { delete held[e.code]; });
+
+    function matches(action, code){
+      return state.input.bindings[action]?.includes(code);
+    }
+
+    function UIAnyOpen(){
+      return [...document.querySelectorAll('.modal')].some(m => m.classList.contains('win'));
+    }
+
+    /* ===========================
+       MAP / TILES
+    ============================ */
+    // Tile types
+    const T = {
+      WATER:0, SAND:1, JUNGLE:2, ROCKY:3, SHIPWRECK:4, HIGH:5
+    };
+
+    // Resource nodes descriptor by tile "node" tag
+    const RES = {
+      palm:   { item:"coconut", charges:2, respawn: CONFIG.RESOURCE_RESPAWN_TURNS.palm },
+      banana: { item:"banana", charges:2, respawn: CONFIG.RESOURCE_RESPAWN_TURNS.banana },
+      vines:  { item:"vines", charges:2, respawn: CONFIG.RESOURCE_RESPAWN_TURNS.vines },
+      rock:   { item:"rock", charges:2, respawn: CONFIG.RESOURCE_RESPAWN_TURNS.rock },
+      drift:  { item:"wood", charges:2, respawn: CONFIG.RESOURCE_RESPAWN_TURNS.driftwood },
+      shell:  { item:"shells", charges:2, respawn: CONFIG.RESOURCE_RESPAWN_TURNS.shell },
+      wreck:  { item:"scrap", charges:2, respawn: CONFIG.RESOURCE_RESPAWN_TURNS.wreck },
+    };
+
+    // map.tiles[y][x] = {type:T.*, node?:{kind, charges, respawnAt}, seen?}
+    function carveIsland(){
+      const w=CONFIG.MAP_W, h=CONFIG.MAP_H;
+      state.map.tiles = new Array(h);
+      for (let y=0;y<h;y++){
+        state.map.tiles[y] = new Array(w);
+        for (let x=0;x<w;x++){
+          state.map.tiles[y][x] = {type:T.WATER};
+        }
+      }
+      // Simple blob island: circle-ish
+      const cx = Math.floor(w*0.5 + randi(-4,4));
+      const cy = Math.floor(h*0.55 + randi(-4,4));
+      const rx = Math.floor(w*0.35 + randi(-4,4));
+      const ry = Math.floor(h*0.28 + randi(-4,4));
+      for (let y=0;y<h;y++){
+        for (let x=0;x<w;x++){
+          const dx=(x-cx)/rx, dy=(y-cy)/ry;
+          const d=dx*dx+dy*dy;
+          if (d<1.0){
+            // Beach ring near edge, jungle inside, rocky or high patches
+            const rim = Math.sqrt(d);
+            let type = T.SAND;
+            if (rim<0.78) type = T.JUNGLE;
+            if (rim<0.52 && RNG()<0.22) type = T.ROCKY;
+            if (RNG()<0.03 && rim<0.65) type = T.HIGH;
+            state.map.tiles[y][x] = {type};
+          }
+        }
+      }
+      // Sprinkle resources
+      for (let y=1;y<h-1;y++){
+        for (let x=1;x<w-1;x++){
+          const tile = state.map.tiles[y][x];
+          if (!tile || tile.type===T.WATER) continue;
+          // Beach resources
+          if (tile.type===T.SAND){
+            if (RNG()<0.08) tile.node = makeNode('drift');
+            if (RNG()<0.10) tile.node = makeNode('shell');
+            if (RNG()<0.06) tile.node = makeNode('palm');
+          }
+          // Jungle
+          if (tile.type===T.JUNGLE){
+            if (RNG()<0.10) tile.node = makeNode('banana');
+            else if (RNG()<0.10) tile.node = makeNode('vines');
+            else if (RNG()<0.05) tile.node = makeNode('palm');
+          }
+          // Rocky
+          if (tile.type===T.ROCKY || tile.type===T.HIGH){
+            if (RNG()<0.18) tile.node = makeNode('rock');
+          }
+        }
+      }
+      // Shipwreck cluster near beach south side
+      const sx = cx + randi(-6,6);
+      const sy = cy + Math.floor(ry*0.7) + randi(2,6);
+      for (let i=0;i<30;i++){
+        const x = sx + randi(-4,4), y = sy + randi(-3,3);
+        if (inBounds(x,y)){
+          const t = state.map.tiles[y][x];
+          if (t && t.type!==T.WATER){
+            t.type = T.SHIPWRECK;
+            if (RNG()<0.6) t.node = makeNode('wreck');
+            else if (RNG()<0.4) t.node = makeNode('drift');
+          }
+        }
+      }
+      // Spawn point: find beach tile near shipwreck
+      let spawn = null, bestDist = 1e9;
+      for (let y=0;y<h;y++){
+        for (let x=0;x<w;x++){
+          const t=state.map.tiles[y][x];
+          if (t && (t.type===T.SAND || t.type===T.SHIPWRECK)) {
+            const d=(x-sx)*(x-sx)+(y-sy)*(y-sy);
+            if (d<bestDist){ bestDist=d; spawn={x,y}; }
+          }
+        }
+      }
+      if (!spawn) spawn = {x:cx, y:cy};
+      state.player.x = spawn.x; state.player.y = spawn.y;
+
+      // Place initial debris cluster around spawn
+      for (let i=0;i<8;i++){
+        const dx=randi(-2,2), dy=randi(-2,2);
+        const x=spawn.x+dx, y=spawn.y+dy;
+        if (inBounds(x,y)){
+          const t=state.map.tiles[y][x];
+          if (t.type!==T.WATER) {
+            t.type = T.SHIPWRECK;
+            if (!t.node) t.node = makeNode('wreck');
+          }
+        }
+      }
+
+      // Crabs
+      state.entities = [];
+      const crabCount = 8 + randi(0,4);
+      for (let i=0;i<crabCount;i++){
+        let x=0,y=0;
+        for (let a=0;a<50;a++){
+          x = randi(0,w-1); y=randi(0,h-1);
+          const t=state.map.tiles[y][x];
+          if (t.type===T.SAND && distance(x,y, state.player.x, state.player.y)>8) break;
+        }
+        state.entities.push({kind:'crab', x, y, lastMoved:-randi(0,CONFIG.CRAB_MOVE_PERIOD)});
+      }
+
+      // Structures (empty start)
+      state.structures = [];
+
+      // Tide schedule
+      state.tideNext = state.turn + CONFIG.TIDE_PERIOD + randi(-CONFIG.TIDE_VARIANCE, CONFIG.TIDE_VARIANCE);
+
+      // Reset fog
+      state.player.hasSeen = new Set();
+      revealAroundPlayer();
+      dirty.all = true;
+    }
+
+    function makeNode(kind){
+      const def = RES[kind];
+      return { kind, charges: def.charges, respawnAt: -1 };
+    }
+
+    function inBounds(x,y){ return x>=0 && y>=0 && x<CONFIG.MAP_W && y<CONFIG.MAP_H }
+
+    /* ===========================
+       ENTITIES & STRUCTURES
+    ============================ */
+    function structureAt(x,y){ return state.structures.find(s=>s.x===x && s.y===y); }
+    function crabAt(x,y){ return state.entities.find(e=>e.kind==='crab' && e.x===x && e.y===y); }
+
+    /* ===========================
+       INVENTORY / ITEMS
+    ============================ */
+    // Items: id string
+    // Food: banana, banana_cooked, coconut, coconut_cooked
+    // Materials: rock, wood, vines, scrap, shells, rope
+    // Tools: Stone Axe (dur), Spear (dur)
+    function addItem(id, qty=1, dur=null){
+      // Stacking
+      const stackable = !["Stone Axe","Spear","Pouch"].includes(id);
+      if (stackable){
+        let slot = state.player.inventory.find(it=>it.id===id && !it.dur);
+        if (slot){
+          const space = CONFIG.MAX_STACK - slot.qty;
+          const add = Math.min(space, qty);
+          slot.qty += add; qty -= add;
+        }
+        while (qty>0){
+          const add = Math.min(CONFIG.MAX_STACK, qty);
+          if (!hasFreeSlot()){ log("No space! Craft a Pouch for more slots.", "warn"); return false; }
+          state.player.inventory.push({id, qty:add});
+          qty -= add;
+        }
+      } else {
+        // tool or single item
+        while (qty>0){
+          if (!hasFreeSlot()){ log("No space!", "warn"); return false; }
+          state.player.inventory.push({id, qty:1, dur: dur ?? CONFIG.TOOL_DURABILITY[id] ?? null});
+          qty--;
+        }
+      }
+      dirty.hud = true;
+      return true;
+    }
+    function removeItems(req){ // req: {id:qty,...}
+      for (const [id, need] of Object.entries(req)){
+        if (countItem(id) < need) return false;
+      }
+      // remove
+      for (const [id, need] of Object.entries(req)){
+        let remain = need;
+        for (const it of state.player.inventory){
+          if (it.id!==id) continue;
+          const take = Math.min(it.qty, remain);
+          it.qty -= take; remain -= take;
+          if (it.qty<=0) it._del = true;
+          if (remain<=0) break;
+        }
+        // delete empties
+        state.player.inventory = state.player.inventory.filter(it=>!it._del);
+      }
+      dirty.hud = true; return true;
+    }
+    function countItem(id){
+      return state.player.inventory.filter(it=>it.id===id).reduce((a,b)=>a+b.qty,0);
+    }
+    function hasFreeSlot(){
+      const used = state.player.inventory.length;
+      return used < state.player.maxSlots;
+    }
+    function findTool(id){
+      return state.player.inventory.find(it=>it.id===id);
+    }
+    function damageTool(id, amt=1){
+      const t = findTool(id);
+      if (t && t.dur!=null){
+        t.dur -= amt;
+        if (t.dur<=0){
+          // break
+          const idx = state.player.inventory.indexOf(t);
+          state.player.inventory.splice(idx,1);
+          log(`${id} broke!`, "warn"); sfx(140, .08, 'sawtooth');
+        }
+      }
+    }
+
+    /* ===========================
+       CRAFTING
+    ============================ */
+    const RECIPES = [
+      { name:"Rope", makes:{rope:1}, cost:CONFIG.ROPE_REQ, desc:"Vines ×2 twisted into rope." },
+      { name:"Stone Axe", makes:{"Stone Axe":1}, cost:CONFIG.AXE_REQ, desc:"Boost wood yields; can fell palms." },
+      { name:"Spear", makes:{"Spear":1}, cost:CONFIG.SPEAR_REQ, desc:"Deter crabs; reduce damage." },
+      { name:"Campfire", makes:{campfire:1}, cost:CONFIG.CAMPFIRE_REQ, place:true, desc:"Rest to restore stamina; cook food." },
+      { name:"Pouch", makes:{Pouch:1}, cost:CONFIG.POUCH_REQ, desc:"+5 inventory slots." },
+      { name:"Signal Fire", makes:{signal:1}, cost:CONFIG.SIGNAL_FIRE_REQ, place:true, desc:"Build on high ground after Day 3 to signal rescue (win)." },
+    ];
+    function canAfford(cost){
+      for (const [k,v] of Object.entries(cost)) if (countItem(k)<v) return false;
+      return true;
+    }
+    function craft(recipe){
+      if (!canAfford(recipe.cost)) { log("Missing ingredients.", "warn"); sfx(220, .05, 'square'); return; }
+      if (recipe.place){
+        // place structure on current tile
+        const t = tileAtPlayer();
+        if (recipe.name==="Signal Fire"){
+          if (!state.gameFlags.canWin) { log("You can only build a Signal Fire after Day 3.", "warn"); return; }
+          if (t.type!==T.HIGH && t.type!==T.ROCKY){
+            log("Signal Fire must be built on high ground.", "warn"); return;
+          }
+          if (structureAt(state.player.x, state.player.y)) {
+            log("There's already something here.", "warn"); return;
+          }
+          if (!removeItems(remapCost(recipe.cost))) return;
+          state.structures.push({type:'signal', x:state.player.x, y:state.player.y, lit:false});
+          log("Built a Signal Fire. Light it when ready!", "ok"); sfx(720,.06,'triangle');
+        } else if (recipe.name==="Campfire"){
+          if (structureAt(state.player.x, state.player.y)) {
+            log("There's already something here.", "warn"); return;
+          }
+          if (!removeItems(remapCost(recipe.cost))) return;
+          state.structures.push({type:'campfire', x:state.player.x, y:state.player.y, lit:true});
+          log("You built a Campfire. Rest here or cook food.", "ok"); sfx(540,.07,'triangle');
+        } else {
+          // generic placement
+          if (!removeItems(remapCost(recipe.cost))) return;
+        }
+      } else {
+        if (!removeItems(remapCost(recipe.cost))) return;
+        for (const [id,qty] of Object.entries(recipe.makes)){
+          if (id==="Pouch"){
+            state.player.maxSlots += CONFIG.POUCH_BONUS_SLOTS;
+            log("You stitched a Pouch. +5 slots!", "ok"); sfx(620,.05,'sine');
+          } else {
+            addItem(id, qty);
+            sfx(600,.05,'sine');
+            log(`Crafted ${id}.`, "ok");
+          }
+        }
+      }
+      dirty.hud = true;
+    }
+    function remapCost(cost){
+      // cost uses 'rocks' plural for campfire; inventory item is 'rock'
+      const map = {};
+      for (const [k,v] of Object.entries(cost)){
+        if (k==="rocks") map["rock"]=v;
+        else map[k]=v;
+      }
+      return map;
+    }
+
+    function openCrafting(){
+      const wrap = document.getElementById('craftList');
+      wrap.innerHTML = "";
+      RECIPES.forEach(rec => {
+        const can = canAfford(remapCost(rec.cost)) && (!rec.place || (rec.name!=="Signal Fire" || state.gameFlags.canWin));
+        const div = document.createElement('div'); div.className = 'craftItem';
+        const title = document.createElement('div'); title.innerHTML = `<strong>${rec.name}</strong> <span class="${can?'ok':'muted'}">(${can?'ready':'need'})</span>`;
+        const req = document.createElement('div'); req.className='muted';
+        req.textContent = "Requires: "+Object.entries(rec.cost).map(([k,v])=>`${k}×${v}`).join(", ");
+        const desc = document.createElement('div'); desc.className='muted'; desc.textContent = rec.desc;
+        const btn = document.createElement('button'); btn.textContent = 'Craft';
+        btn.disabled = !can;
+        btn.onclick = () => { craft(rec); openCrafting(); dirty.all = true; };
+        div.append(title, req, desc, btn);
+        wrap.append(div);
+      });
+      UI.openModal('craftModal');
+    }
+
+    function openInventory(){
+      const list = document.getElementById('invList'); list.innerHTML="";
+      document.getElementById('invSlots').textContent = `${state.player.inventory.length}/${state.player.maxSlots}`;
+      state.player.inventory.forEach((it, idx) => {
+        const row = document.createElement('div'); row.className='invSlot';
+        const name = document.createElement('span');
+        name.textContent = it.id + (it.dur!=null?` (${it.dur})`:"");
+        const qty = document.createElement('span'); qty.textContent = "×"+it.qty;
+        row.append(name, qty);
+        row.onclick = () => {
+          // eat if food
+          if (["banana","banana_cooked","coconut","coconut_cooked"].includes(it.id)){
+            eatItem(idx);
+          }
+        };
+        list.append(row);
+      });
+      UI.openModal('invModal');
+    }
+
+    function eatItem(index){
+      const it = state.player.inventory[index];
+      const val = CONFIG.EAT_VALUES[it.id] ?? 0;
+      if (val<=0){ log("You can't eat that.", "warn"); return; }
+      // consume 1
+      it.qty -= 1; if (it.qty<=0) state.player.inventory.splice(index,1);
+      const before = state.player.hunger;
+      state.player.hunger = clamp(state.player.hunger + val, 0, CONFIG.HUNGER_MAX);
+      sfx(480,.05,'triangle'); log(`Ate ${it.id.replace('_',' ')} (+${state.player.hunger-before} hunger).`, "ok");
+      dirty.hud = true;
+    }
+
+    /* ===========================
+       PLAYER ACTIONS
+    ============================ */
+    function tryMove(dx,dy){
+      const nx = state.player.x + dx, ny = state.player.y + dy;
+      if (!inBounds(nx,ny)) return;
+      const t = state.map.tiles[ny][nx];
+      if (t.type===T.WATER) { log("Water's too deep.", "muted"); return; }
+      state.player.x=nx; state.player.y=ny;
+      payStamina(CONFIG.STAM_MOVE_COST);
+      revealAroundPlayer();
+      advanceTurn();
+      sfx(240,.02,'square',.03);
+      screenShake();
+    }
+
+    function payStamina(cost){
+      state.player.stamina = Math.max(0, state.player.stamina - cost);
+    }
+
+    function tileAtPlayer(){
+      return state.map.tiles[state.player.y][state.player.x];
+    }
+
+    function doGatherOrInteract(){
+      const t = tileAtPlayer();
+      const s = structureAt(state.player.x, state.player.y);
+      if (s){
+        if (s.type==='campfire'){
+          campfireMenu(s);
+          return;
+        } else if (s.type==='signal'){
+          if (!s.lit) {
+            if (!state.gameFlags.canWin){ log("Too early to light a signal fire.", "warn"); return; }
+            s.lit = true; log("You lit the Signal Fire! Rescue will see it...", "ok");
+            sfx(900,.12,'triangle');
+            state.gameFlags.won = true;
+            saveGame();
+            setTimeout(()=>{ alert("Rescue spotted your Signal Fire. You win!"); }, 100);
+            return;
+          }
+        }
+      }
+      if (!t.node || t.node.charges<=0) { log("Nothing here to gather.", "muted"); return; }
+      // gather
+      let item = RES[t.node.kind].item;
+      let yieldQty = 1;
+      const axe = findTool("Stone Axe");
+      if (t.node.kind==='drift' || t.node.kind==='wreck'){
+        // normal
+      } else if (t.node.kind==='palm'){
+        if (axe){ yieldQty = 2; if (chance(0.2)) { // rare fell for wood
+          addItem('wood', 1);
+          log("You felled part of the palm (wood +1).", "ok");
+          damageTool("Stone Axe", 2);
+        } else damageTool("Stone Axe", 1); }
+      } else if (t.node.kind==='banana'){
+        // bananas
+      } else if (t.node.kind==='vines'){
+        // vines
+      } else if (t.node.kind==='rock'){
+        // rocks; axe not used
+      } else if (t.node.kind==='shell'){
+        // shells
+      }
+      if (!addItem(item, yieldQty)) return;
+      payStamina(CONFIG.STAM_GATHER_COST);
+      t.node.charges -= 1;
+      if (t.node.charges<=0){
+        t.node.respawnAt = state.turn + RES[t.node.kind].respawn + randi(0,20);
+      }
+      log(`Gathered ${item}.`, "ok");
+      sfx(350,.05,'square');
+      // Tool durability slight for gather with axe on wood kinds
+      if (t.node.kind==='drift' || t.node.kind==='palm') {
+        if (axe) damageTool("Stone Axe", 1);
+      }
+      advanceTurn();
+      dirty.all = true;
+    }
+
+    function campfireMenu(cf){
+      const opts = [
+        {label:"Rest (+30 stamina, -10 hunger)", fn:()=> {
+          state.player.stamina = clamp(state.player.stamina+30,0,CONFIG.STAM_MAX);
+          state.player.hunger = clamp(state.player.hunger-10,0,CONFIG.HUNGER_MAX);
+          log("You rest by the fire.", "ok"); sfx(300,.12,'sine'); advanceTurn();
+        }},
+        {label:"Cook Banana → Cooked", fn:()=> {
+          if (countItem('banana')<=0){ log("No bananas to cook.", "warn"); return; }
+          removeItems({banana:1}); addItem('banana_cooked',1); log("Cooked banana.", "ok"); sfx(640,.05,'triangle'); advanceTurn();
+        }},
+        {label:"Roast Coconut → Roasted", fn:()=> {
+          if (countItem('coconut')<=0){ log("No coconuts to roast.", "warn"); return; }
+          removeItems({coconut:1}); addItem('coconut_cooked',1); log("Roasted coconut.", "ok"); sfx(620,.05,'triangle'); advanceTurn();
+        }},
+        {label:"Extinguish/Relight", fn:()=> { cf.lit = !cf.lit; log(cf.lit?"You lit the campfire.":"You doused the campfire.","muted"); sfx(500,.05,'sine'); dirty.all=true; }}
+      ];
+      // simple prompt UI
+      const choice = prompt("Campfire:\n1) Rest\n2) Cook Banana\n3) Roast Coconut\n4) Toggle Fire\n\nEnter #:");
+      const n = Number(choice);
+      if (n>=1 && n<=opts.length) opts[n-1].fn();
+    }
+
+    function doWait(){
+      log("You wait and observe...", "muted");
+      advanceTurn();
+    }
+
+    function doConfirm(){
+      // reserved for future contextual actions
+    }
+
+    function revealAroundPlayer(){
+      const r=6;
+      for (let yy=-r; yy<=r; yy++){
+        for (let xx=-r; xx<=r; xx++){
+          const x=state.player.x+xx, y=state.player.y+yy;
+          if (inBounds(x,y)){
+            state.player.hasSeen.add(y*1000+x);
+          }
+        }
+      }
+    }
+
+    /* ===========================
+       TURN / WORLD UPDATE
+    ============================ */
+    function advanceTurn(){
+      state.turn++;
+      if (state.turn % CONFIG.DAY_TURNS === 0){ state.day++; log(`Day ${state.day} begins.`, "muted"); if (state.day>=4) state.gameFlags.canWin = true; }
+      // hunger drain
+      state.player.hunger = clamp(state.player.hunger - CONFIG.HUNGER_DRAIN_PER_TURN, 0, CONFIG.HUNGER_MAX);
+      if (state.player.hunger<=0){
+        // starvation damage every 5 turns
+        if (state.turn % 5 === 0){
+          let dmg = 1; // spear doesn't help here
+          state.player.health -= dmg; log("You suffer from starvation (-1).", "bad"); sfx(140,.06,'sawtooth');
+        }
+      }
+      // crab AI
+      crabAI();
+      // resources respawn
+      resourceRespawnTick();
+      // tide event?
+      if (state.turn >= state.tideNext){
+        doTide();
+        state.tideNext = state.turn + CONFIG.TIDE_PERIOD + randi(-CONFIG.TIDE_VARIANCE, CONFIG.TIDE_VARIANCE);
+      }
+      // check death/win
+      if (state.player.health<=0 && !state.gameFlags.dead){
+        state.gameFlags.dead=true; sfx(100,.2,'sawtooth'); setTimeout(()=>alert("You succumbed on the island..."), 100);
+      }
+      // autosave
+      if (state.turn % CONFIG.AUTOSAVE_EVERY === 0) saveGame();
+      dirty.hud = true; dirty.all = true;
+    }
+
+    function resourceRespawnTick(){
+      for (let y=0;y<CONFIG.MAP_H;y++){
+        for (let x=0;x<CONFIG.MAP_W;x++){
+          const t=state.map.tiles[y][x];
+          if (t.node && t.node.charges<=0 && t.node.respawnAt>0 && state.turn>=t.node.respawnAt){
+            const def = RES[t.node.kind];
+            t.node.charges = def.charges;
+            t.node.respawnAt = -1;
+          }
+        }
+      }
+    }
+
+    function crabAI(){
+      for (const e of state.entities){
+        if (e.kind!=='crab') continue;
+        if ((state.turn - e.lastMoved) % CONFIG.CRAB_MOVE_PERIOD !== 0) continue;
+        // if adjacent to player -> nip
+        if (Math.abs(e.x-state.player.x)+Math.abs(e.y-state.player.y)===1){
+          let dmg = CONFIG.CRAB_DAMAGE;
+          if (findTool('Spear')) { dmg = 0; log("Your spear fends off a crab.", "muted"); sfx(300,.03,'square'); }
+          else { state.player.health -= dmg; log("A crab nips you (-1).", "bad"); sfx(220,.04,'square'); }
+          e.lastMoved = state.turn;
+          continue;
+        }
+        // random wander on sand/beach
+        const dirs = shuffle([[1,0],[-1,0],[0,1],[0,-1]]);
+        for (const [dx,dy] of dirs){
+          const nx=e.x+dx, ny=e.y+dy;
+          if (!inBounds(nx,ny)) continue;
+          const t=state.map.tiles[ny][nx];
+          if (t.type===T.SAND || t.type===T.SHIPWRECK){
+            // avoid stepping on player
+            if (nx===state.player.x && ny===state.player.y) continue;
+            e.x=nx; e.y=ny; e.lastMoved=state.turn; break;
+          }
+        }
+      }
+    }
+
+    function doTide(){
+      log("The tide surges along the beach...", "warn"); sfx(180,.1,'sine');
+      // Affect a swath of beach tiles near edges: reduce some resource charges, add shells
+      let affected = 0;
+      for (let y=0;y<CONFIG.MAP_H;y++){
+        for (let x=0;x<CONFIG.MAP_W;x++){
+          const t=state.map.tiles[y][x];
+          if (t.type===T.SAND && chance(0.08)){
+            affected++;
+            // wash resources
+            if (t.node && t.node.kind!=='shell'){
+              if (t.node.charges>0 && chance(0.5)) t.node.charges = Math.max(0, t.node.charges-1);
+            } else if (!t.node && chance(0.2)){
+              t.node = makeNode('shell'); // tide leaves shells
+            }
+            // wet campfires on sand => extinguish
+            const s = structureAt(x,y);
+            if (s && s.type==='campfire'){ s.lit=false; }
+            // standing on edge? small stam hit
+            if (x===state.player.x && y===state.player.y){
+              state.player.stamina = Math.max(0, state.player.stamina-4);
+              log("You brace against the tide (-4 stamina).", "muted");
+            }
+          }
+        }
+      }
+      dirty.all = true;
+    }
+
+    function shuffle(a){ for (let i=a.length-1;i>0;i--){ const j=Math.floor(RNG()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+    /* ===========================
+       RENDERING
+    ============================ */
+    const view = { x:0, y:0, w:CONFIG.VIEW_W, h:CONFIG.VIEW_H };
+    function centerCamera(){
+      view.x = clamp(state.player.x - Math.floor(view.w/2), 0, CONFIG.MAP_W - view.w);
+      view.y = clamp(state.player.y - Math.floor(view.h/2), 0, CONFIG.MAP_H - view.h);
+    }
+
+    function draw(){
+      if (!dirty.all) return;
+      centerCamera();
+      const ts=CONFIG.TILE_SIZE;
+      ctx.setTransform(1,0,0,1,0,0);
+      ctx.clearRect(0,0,canvas.width, canvas.height);
+
+      // optional subtle shake
+      if (shakeTime>0 && state.settings.shake){
+        const s = CONFIG.SCREEN_SHAKE_PX;
+        ctx.translate(randi(-s,s), randi(-s,s));
+        shakeTime--;
+      }
+
+      // draw tiles
+      for (let sy=0;sy<view.h;sy++){
+        for (let sx=0;sx<view.w;sx++){
+          const x = view.x + sx, y = view.y + sy;
+          if (!inBounds(x,y)) continue;
+          const t = state.map.tiles[y][x];
+          const px = sx*ts, py=sy*ts;
+
+          const seen = state.settings.reveal || state.player.hasSeen.has(y*1000+x);
+          if (!seen) { // fog
+            ctx.fillStyle = "#0b0c11";
+            ctx.fillRect(px,py,ts,ts);
+            continue;
+          }
+
+          // base tile color
+          if (t.type===T.WATER){ ctx.fillStyle = CONFIG.COLORS.water; }
+          else if (t.type===T.SAND){ ctx.fillStyle = CONFIG.COLORS.beach; }
+          else if (t.type===T.JUNGLE){ ctx.fillStyle = CONFIG.COLORS.jungle; }
+          else if (t.type===T.ROCKY){ ctx.fillStyle = CONFIG.COLORS.rock; }
+          else if (t.type===T.SHIPWRECK){ ctx.fillStyle = CONFIG.COLORS.ship; }
+          else if (t.type===T.HIGH){ ctx.fillStyle = CONFIG.COLORS.high; }
+          ctx.fillRect(px,py,ts,ts);
+
+          // subtle texture
+          if (t.type===T.JUNGLE){
+            ctx.fillStyle = CONFIG.COLORS.jungle2;
+            if (((x+y)&1)===0) ctx.fillRect(px+8,py+8,2,2);
+          } else if (t.type===T.SAND){
+            ctx.fillStyle = "#d9c993";
+            if ((x*y)%3===0) ctx.fillRect(px+12,py+4,1,1);
+          } else if (t.type===T.SHIPWRECK){
+            ctx.fillStyle = CONFIG.COLORS.scrap;
+            ctx.fillRect(px+5,py+10,ts-10,3);
+          }
+
+          // node drawing (simple glyphs)
+          if (t.node && t.node.charges>0){
+            ctx.fillStyle = "#111";
+            let ch = t.node.kind;
+            if (ch==='palm'){ // trunk + fronds
+              ctx.fillStyle = "#654321"; ctx.fillRect(px+9,py+4,2,12);
+              ctx.fillStyle = "#2ea043"; ctx.fillRect(px+6,py+3,8,2);
+            } else if (ch==='banana'){
+              ctx.fillStyle = "#f1e05a"; ctx.fillRect(px+6,py+6,8,3);
+            } else if (ch==='vines'){
+              ctx.fillStyle = "#2ea043"; ctx.fillRect(px+4,py+4,2,10); ctx.fillRect(px+14,py+2,2,12);
+            } else if (ch==='rock'){
+              ctx.fillStyle = "#9c9a96"; ctx.fillRect(px+6,py+8,8,6);
+            } else if (ch==='drift'){
+              ctx.fillStyle = "#8b6a3e"; ctx.fillRect(px+4,py+12,12,3);
+            } else if (ch==='shell'){
+              ctx.fillStyle = CONFIG.COLORS.shell; ctx.fillRect(px+7,py+10,6,4);
+            } else if (ch==='wreck'){
+              ctx.fillStyle = CONFIG.COLORS.scrap; ctx.fillRect(px+3,py+6,14,4);
+            }
+            // charges pips
+            ctx.fillStyle = "#0007";
+            for (let i=0;i<t.node.charges;i++){ ctx.fillRect(px+2+i*3, py+2, 2,2); }
+          }
+
+          // structure
+          const s = structureAt(x,y);
+          if (s){
+            if (s.type==='campfire'){
+              ctx.fillStyle = s.lit ? "#ff9933" : "#555";
+              ctx.fillRect(px+8,py+8,4,4);
+            } else if (s.type==='signal'){
+              ctx.fillStyle = "#aa5522"; ctx.fillRect(px+9,py+5,2,12);
+              if (s.lit){ ctx.fillStyle = "#ffcc55"; ctx.fillRect(px+7,py+3,6,3); }
+            }
+          }
+
+          // fog overlay but lighter if seen previously
+          if (!state.settings.reveal && !isVisibleToPlayer(x,y)){
+            ctx.fillStyle = "rgba(0,0,0,0.33)";
+            ctx.fillRect(px,py,ts,ts);
+          }
+        }
+      }
+
+      // entities (crabs)
+      for (const e of state.entities){
+        if (!onScreen(e.x,e.y)) continue;
+        if (!state.settings.reveal && !state.player.hasSeen.has(e.y*1000+e.x)) continue;
+        const sx = (e.x - view.x)*ts, sy=(e.y - view.y)*ts;
+        if (e.kind==='crab'){
+          ctx.fillStyle="#d9534f";
+          ctx.fillRect(sx+6,sy+10,8,4);
+          ctx.fillRect(sx+4,sy+12,2,2); ctx.fillRect(sx+14,sy+12,2,2);
+        }
+      }
+
+      // player
+      const px = (state.player.x - view.x)*ts;
+      const py = (state.player.y - view.y)*ts;
+      ctx.fillStyle="#ffd966";
+      ctx.fillRect(px+6,py+6,8,8); // body
+      ctx.fillStyle="#8b5a2b"; ctx.fillRect(px+7,py+4,6,3); // headband-ish
+      ctx.fillStyle="#1a1a1a"; ctx.fillRect(px+6,py+3,8,1); // pirate hat brim
+
+      // grid lines (subtle)
+      ctx.strokeStyle = "rgba(255,255,255,0.04)";
+      ctx.lineWidth=1;
+      for (let gx=0;gx<=view.w;gx++){ ctx.beginPath(); ctx.moveTo(gx*ts,0); ctx.lineTo(gx*ts,view.h*ts); ctx.stroke(); }
+      for (let gy=0;gy<=view.h;gy++){ ctx.beginPath(); ctx.moveTo(0,gy*ts); ctx.lineTo(view.w*ts,gy*ts); ctx.stroke(); }
+
+      dirty.all = false;
+    }
+
+    function onScreen(x,y){ return x>=view.x && x<view.x+view.w && y>=view.y && y<view.y+view.h }
+    function isVisibleToPlayer(x,y){
+      // simple radius visibility
+      const d = Math.abs(x-state.player.x)+Math.abs(y-state.player.y);
+      return d <= 6;
+    }
+
+    // HUD
+    function drawHUD(){
+      if (!dirty.hud) return;
+      document.getElementById('statHealth').textContent = `${state.player.health}/${CONFIG.HEALTH_MAX}`;
+      document.getElementById('statStam').textContent = `${state.player.stamina}/${CONFIG.STAM_MAX}`;
+      document.getElementById('statHunger').textContent = `${state.player.hunger}/${CONFIG.HUNGER_MAX}`;
+      document.getElementById('statTurn').textContent = state.turn;
+      document.getElementById('statDay').textContent = state.day;
+      document.getElementById('seedDisp').textContent = state.seed;
+      updateTopbar();
+      dirty.hud = false;
+    }
+
+    // Tooltip under cursor with active tile info
+    const tooltipEl = document.getElementById('toolTip');
+    canvas.addEventListener('mousemove', (e)=>{
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+      const ts=CONFIG.TILE_SIZE;
+      const tx = Math.floor(mx/ts)+view.x, ty=Math.floor(my/ts)+view.y;
+      if (!inBounds(tx,ty)){ tooltipEl.textContent = ""; return; }
+      const t = state.map.tiles[ty][tx];
+      if (!t){ tooltipEl.textContent = ""; return; }
+      let desc = tileName(t.type);
+      if (t.node && t.node.charges>0) desc += ` | ${nodeName(t.node.kind)} (${t.node.charges})`;
+      const s = structureAt(tx,ty);
+      if (s){ desc += ` | ${s.type==="campfire"?"Campfire":"Signal Fire"}${s.lit?" (lit)":""}`; }
+      tooltipEl.textContent = `Tile: ${desc}`;
+    });
+
+    function tileName(t){
+      return t===T.WATER?'Water':t===T.SAND?'Beach':t===T.JUNGLE?'Jungle':t===T.ROCKY?'Rocky':t===T.SHIPWRECK?'Shipwreck':t===T.HIGH?'High Ground':'?';
+    }
+    function nodeName(k){
+      const m = {palm:'Palm (coconuts)', banana:'Banana Tree', vines:'Vines', rock:'Rocks', drift:'Driftwood', shell:'Shells', wreck:'Wreckage'};
+      return m[k]||k;
+    }
+
+    /* ===========================
+       SAVE / LOAD
+    ============================ */
+    function saveSettings(){
+      localStorage.setItem(CONFIG.SAVE_KEY+"_settings", JSON.stringify(state.settings));
+      localStorage.setItem(CONFIG.SAVE_KEY+"_binds", JSON.stringify(state.input.bindings));
+    }
+
+    function saveGame(){
+      const save = {
+        v: CONFIG.VERSION,
+        seed: state.seed, turn: state.turn, day: state.day,
+        player: {
+          x: state.player.x, y: state.player.y,
+          health: state.player.health, stamina: state.player.stamina, hunger: state.player.hunger,
+          inventory: state.player.inventory, maxSlots: state.player.maxSlots, hasSeen: [...state.player.hasSeen]
+        },
+        map: serializeMap(),
+        entities: state.entities,
+        structures: state.structures,
+        flags: state.gameFlags,
+        tideNext: state.tideNext,
+      };
+      localStorage.setItem(CONFIG.SAVE_KEY, JSON.stringify(save));
+      saveSettings();
+    }
+
+    function serializeMap(){
+      const arr = [];
+      for (let y=0;y<CONFIG.MAP_H;y++){
+        for (let x=0;x<CONFIG.MAP_W;x++){
+          const t=state.map.tiles[y][x];
+          arr.push({
+            t: t.type,
+            n: t.node ? {k:t.node.kind, c:t.node.charges, r:t.node.respawnAt} : null
+          });
+        }
+      }
+      return {w:CONFIG.MAP_W, h:CONFIG.MAP_H, a:arr};
+    }
+
+    function deserializeMap(data){
+      const tiles = new Array(data.h);
+      let i=0;
+      for (let y=0;y<data.h;y++){
+        tiles[y] = new Array(data.w);
+        for (let x=0;x<data.w;x++){
+          const e = data.a[i++];
+          tiles[y][x] = {type:e.t, node: e.n ? {kind:e.n.k, charges:e.n.c, respawnAt:e.n.r} : undefined };
+        }
+      }
+      state.map.tiles = tiles;
+    }
+
+    function loadGame(){
+      const raw = localStorage.getItem(CONFIG.SAVE_KEY);
+      if (!raw) return false;
+      try{
+        const save = JSON.parse(raw);
+        setSeed(save.seed || "island-0001");
+        state.turn = save.turn; state.day = save.day;
+        Object.assign(state.player, save.player);
+        state.player.hasSeen = new Set(save.player.hasSeen || []);
+        deserializeMap(save.map);
+        state.entities = save.entities || [];
+        state.structures = save.structures || [];
+        state.gameFlags = save.flags || {won:false, dead:false, canWin:false};
+        state.tideNext = save.tideNext || (state.turn + CONFIG.TIDE_PERIOD);
+        const sraw = localStorage.getItem(CONFIG.SAVE_KEY+"_settings");
+        if (sraw){ Object.assign(state.settings, JSON.parse(sraw)); }
+        const braw = localStorage.getItem(CONFIG.SAVE_KEY+"_binds");
+        if (braw){ state.input.bindings = JSON.parse(braw); }
+        dirty.all = true; dirty.hud = true;
+        return true;
+      }catch(e){ console.error(e); return false; }
+    }
+
+    window.addEventListener('beforeunload', saveGame);
+
+    function newRun(seed){
+      setSeed(seed);
+      state.turn=0; state.day=1;
+      state.player.health=CONFIG.HEALTH_MAX;
+      state.player.stamina=CONFIG.STAM_MAX;
+      state.player.hunger=CONFIG.HUNGER_MAX;
+      state.player.inventory=[];
+      state.player.maxSlots=CONFIG.BASE_SLOTS;
+      state.gameFlags={won:false, dead:false, canWin:false};
+      carveIsland();
+      // Starter tips & a couple items
+      addItem('banana',2); addItem('rock',2); addItem('wood',1);
+      log(`You awaken shipwrecked on a strange beach. (Seed: ${seed})`);
+      log("Tip: Gather with G; Craft with C. Find vines for rope; rocks & wood for tools.", "muted");
+      dirty.all = true; dirty.hud = true;
+      saveGame();
+    }
+
+    /* ===========================
+       DEBUG PANEL
+    ============================ */
+    const dbg = {
+      el: document.getElementById('debugPanel'),
+      reveal: document.getElementById('dbgReveal'),
+      seed: document.getElementById('dbgSeed'),
+    };
+    function toggleDebug(){
+      dbg.el.style.display = dbg.el.style.display==='none' || !dbg.el.style.display ? 'block' : 'none';
+    }
+    document.getElementById('dbgClose').onclick = toggleDebug;
+    document.getElementById('dbgReveal').onchange = (e)=>{ state.settings.reveal = e.target.checked; saveSettings(); dirty.all=true; };
+    document.getElementById('dbgApplySeed').onclick = ()=>{ const s = document.getElementById('dbgSeed').value.trim(); if (s){ newRun(s); } };
+    document.getElementById('dbgAdvance10').onclick = ()=>{ for (let i=0;i<10;i++) advanceTurn(); };
+    document.getElementById('dbgAdvance100').onclick = ()=>{ for (let i=0;i<100;i++) advanceTurn(); };
+    document.getElementById('dbgSpawnCrab').onclick = ()=>{ state.entities.push({kind:'crab', x:state.player.x+1, y:state.player.y}); dirty.all=true; };
+    document.getElementById('dbgGiveFood').onclick = ()=>{ addItem('banana',3); openInventory(); };
+    document.getElementById('dbgGiveKit').onclick = ()=>{ addItem('rope',1); addItem('wood',2); addItem('rock',3); addItem('vines',2); addItem('shells',5); addItem('scrap',3); addItem("Stone Axe",1,CONFIG.TOOL_DURABILITY["Stone Axe"]); addItem("Spear",1,CONFIG.TOOL_DURABILITY["Spear"]); openInventory(); };
+    document.getElementById('dbgGiveAll').onclick = ()=>{ ['banana','coconut','rock','wood','vines','scrap','shells','rope'].forEach(id=>addItem(id,10)); openInventory(); };
+
+    /* ===========================
+       HELPERS
+    ============================ */
+    function clamp(v,min,max){ return Math.max(min, Math.min(max, v)); }
+    function distance(x1,y1,x2,y2){ return Math.abs(x1-x2)+Math.abs(y1-y2); }
+
+    /* ===========================
+       SCREEN SHAKE
+    ============================ */
+    let shakeTime = 0;
+    function screenShake(){
+      shakeTime = 2;
+    }
+
+    /* ===========================
+       GAME LOOP (idle redraw only)
+    ============================ */
+    function frame(){
+      draw();
+      drawHUD();
+      requestAnimationFrame(frame);
+    }
+
+    /* ===========================
+       INITIALIZE
+    ============================ */
+    function init(){
+      const sraw = localStorage.getItem(CONFIG.SAVE_KEY+"_settings");
+      if (sraw){ Object.assign(state.settings, JSON.parse(sraw)); }
+      const braw = localStorage.getItem(CONFIG.SAVE_KEY+"_binds");
+      if (braw){ state.input.bindings = JSON.parse(braw); }
+      updateTopbar();
+      // try load game
+      if (!loadGame()){
+        newRun("island-0001");
+      } else {
+        log("Save loaded. Survive and thrive!", "muted");
+      }
+      // expose seed in debug field
+      document.getElementById('dbgSeed').value = state.seed;
+      // first tips
+      UI.toastTipOnce('craft', "Open Crafting (C) to see recipes like Rope, Stone Axe, Campfire.");
+      requestAnimationFrame(frame);
+    }
+
+    /* ===========================
+       MOUSE CLICK UI (modals)
+    ============================ */
+    document.getElementById('invModal').addEventListener('click', (e)=>{ if (e.target.id==='invModal') UI.closeModal('invModal'); });
+    document.getElementById('craftModal').addEventListener('click', (e)=>{ if (e.target.id==='craftModal') UI.closeModal('craftModal'); });
+    document.getElementById('helpModal').addEventListener('click', (e)=>{ if (e.target.id==='helpModal') UI.closeModal('helpModal'); });
+
+    /* ===========================
+       START
+    ============================ */
+    init();
+
+  })();
+  </script>
+</body>
+</html>
