@@ -1,79 +1,273 @@
-import { CONFIG, COLORS } from "../core/config";
+import { Application, Container, Sprite, Texture } from "pixi.js";
+import { CONFIG } from "../core/config";
 import { state, dirty, log } from "../core/state";
 import { TileType } from "../core/types";
+import { SimpleAtlas } from "../core/atlas";
 
-const canvas = document.getElementById("gameCanvas") as HTMLCanvasElement;
-const ctx = canvas.getContext("2d")!;
+/** M1: PixiJS renderer that preserves M0b’s public API:
+ *  - export function startRenderLoop()
+ *  - export function gatherHere()
+ *
+ * Uses /public/assets/* and atlas_map.json. Keeps all gameplay logic identical.
+ */
 
-const view = { x:0, y:0, w:CONFIG.VIEW_W, h:CONFIG.VIEW_H };
+// Sprite source tile size & scale (art is 16×16; on-screen scale 4× for readability)
+const SPRITE_TILE = 16;
+const SCALE = 4;
 
-function centerCamera(){
-  view.x = clamp(state.player.x - Math.floor(view.w/2), 0, state.map.w - view.w);
-  view.y = clamp(state.player.y - Math.floor(view.h/2), 0, state.map.h - view.h);
+// Pixi singletons
+let app: Application | null = null;
+let world: Container | null = null;
+const layers = {
+  tiles: new Container(),
+  nodes: new Container(),
+  entities: new Container(),
+  overlay: new Container(),
+};
+
+// Pools
+const tilePool = new Map<string, Sprite>();
+const nodePool = new Map<string, Sprite>();
+const entityPool = new Map<string, Sprite>();
+
+// Camera/view (same math as M0b; we just draw with Pixi)
+const view = { x: 0, y: 0, w: CONFIG.VIEW_W, h: CONFIG.VIEW_H };
+
+// Atlas
+let atlas: SimpleAtlas | null = null;
+
+// Tile type → atlas key
+const TILE_NAME: Record<number, string> = {
+  [TileType.WATER]: "water",
+  [TileType.SAND]: "sand",
+  [TileType.JUNGLE]: "jungle",
+  [TileType.ROCKY]: "rocky",
+  [TileType.SHIPWRECK]: "shipwreck",
+  [TileType.HIGH]: "high",
+};
+
+// Node kind → atlas key(s)
+const NODE_NAME: Record<string, string[]> = {
+  palm: ["palm", "props.png/palm"],
+  banana: ["banana", "props.png/banana"],
+  vines: ["vines", "props.png/vines"],
+  rock: ["rocks", "props.png/rocks"], // our sprite is named "rocks"
+  drift: ["driftwood", "props.png/driftwood"],
+  shell: ["shells", "props.png/shells"],
+  wreck: ["wreck", "props.png/wreck"],
+};
+
+// Fallback tints (if a texture isn’t found, you still see something)
+const FALLBACK: Record<string, number> = {
+  water: 0x2b5ea7,
+  sand: 0xe8d7a5,
+  jungle: 0x276f3b,
+  rocky: 0x807d7a,
+  shipwreck: 0x6f4f28,
+  high: 0x8c8769,
+  node: 0xffffff,
+  player: 0xffd966,
+  crab: 0xd9534f,
+};
+
+function clamp(v: number, min: number, max: number) { return Math.max(min, Math.min(max, v)); }
+function centerCamera() {
+  view.x = clamp(state.player.x - Math.floor(view.w / 2), 0, state.map.w - view.w);
+  view.y = clamp(state.player.y - Math.floor(view.h / 2), 0, state.map.h - view.h);
 }
-function clamp(v:number,min:number,max:number){ return Math.max(min, Math.min(max, v)); }
 
-export function draw(){
-  if (!dirty.all) return;
-  centerCamera();
-  const ts = CONFIG.TILE_SIZE;
-  ctx.setTransform(1,0,0,1,0,0);
-  ctx.clearRect(0,0, canvas.width, canvas.height);
+async function ensurePixi() {
+  if (app) return;
 
-  for (let sy=0; sy<view.h; sy++){
-    for (let sx=0; sx<view.w; sx++){
-      const x = view.x+sx, y=view.y+sy;
-      const t = state.map.tiles[y]?.[x];
-      const px=sx*ts, py=sy*ts;
-      if (!t){ ctx.fillStyle="#000"; ctx.fillRect(px,py,ts,ts); continue; }
-      // base color
-      ctx.fillStyle = t.type===TileType.WATER?COLORS.water:
-                      t.type===TileType.SAND?COLORS.beach:
-                      t.type===TileType.JUNGLE?COLORS.jungle:
-                      t.type===TileType.ROCKY?COLORS.rock:
-                      t.type===TileType.SHIPWRECK?COLORS.ship:
-                      COLORS.high;
-      ctx.fillRect(px,py,ts,ts);
-      // simple node glyphs
-      if (t.node && t.node.charges>0){
-        if (t.node.kind==="palm"){ ctx.fillStyle="#654321"; ctx.fillRect(px+9,py+4,2,12); ctx.fillStyle="#2ea043"; ctx.fillRect(px+6,py+3,8,2); }
-        else if (t.node.kind==="banana"){ ctx.fillStyle="#f1e05a"; ctx.fillRect(px+6,py+6,8,3); }
-        else if (t.node.kind==="vines"){ ctx.fillStyle="#2ea043"; ctx.fillRect(px+4,py+4,2,10); ctx.fillRect(px+14,py+2,2,12); }
-        else if (t.node.kind==="rock"){ ctx.fillStyle="#9c9a96"; ctx.fillRect(px+6,py+8,8,6); }
-        else if (t.node.kind==="drift"){ ctx.fillStyle="#8b6a3e"; ctx.fillRect(px+4,py+12,12,3); }
-        else if (t.node.kind==="shell"){ ctx.fillStyle=COLORS.shell; ctx.fillRect(px+7,py+10,6,4); }
-        else if (t.node.kind==="wreck"){ ctx.fillStyle=COLORS.scrap; ctx.fillRect(px+3,py+6,14,4); }
-      }
+  app = new Application();
+  const canvas = document.getElementById("gameCanvas") as HTMLCanvasElement | null;
+
+  await app.init({
+    view: canvas ?? undefined,
+    backgroundAlpha: 0,
+    antialias: false,
+    resolution: 1,
+  });
+
+  world = new Container();
+  world.scale.set(SCALE, SCALE);
+  app.stage.addChild(world);
+
+  layers.entities.sortableChildren = true;
+  world.addChild(layers.tiles);
+  world.addChild(layers.nodes);
+  world.addChild(layers.entities);
+  world.addChild(layers.overlay);
+
+  // Load atlas
+  atlas = new SimpleAtlas();
+  await atlas.load("/assets/atlas_map.json");
+
+  // Crisp pixels
+  (app.renderer.canvas as HTMLCanvasElement).style.imageRendering = "pixelated";
+
+  resizeRenderer();
+}
+
+function resizeRenderer() {
+  if (!app || !world) return;
+  const w = view.w * SPRITE_TILE * SCALE;
+  const h = view.h * SPRITE_TILE * SCALE;
+  app.renderer.resize(w, h);
+}
+
+function ensureSprite(pool: Map<string, Sprite>, layer: Container, key: string): Sprite {
+  let sp = pool.get(key);
+  if (!sp) {
+    sp = new Sprite(Texture.WHITE);
+    sp.width = SPRITE_TILE;
+    sp.height = SPRITE_TILE;
+    layer.addChild(sp);
+    pool.set(key, sp);
+  }
+  return sp;
+}
+function prune(pool: Map<string, Sprite>, layer: Container, keep: Set<string>) {
+  for (const [k, sp] of pool) {
+    if (!keep.has(k)) {
+      layer.removeChild(sp);
+      sp.destroy();
+      pool.delete(k);
     }
   }
-
-  // player
-  const px=(state.player.x - view.x)*ts, py=(state.player.y - view.y)*ts;
-  ctx.fillStyle="#ffd966"; ctx.fillRect(px+6,py+6,8,8); // body
-  ctx.fillStyle="#8b5a2b"; ctx.fillRect(px+7,py+4,6,3);
-  ctx.fillStyle="#1a1a1a"; ctx.fillRect(px+6,py+3,8,1);
-
-  // light grid
-  ctx.strokeStyle="rgba(255,255,255,0.05)";
-  for (let gx=0;gx<=view.w;gx++){ ctx.beginPath(); ctx.moveTo(gx*ts,0); ctx.lineTo(gx*ts,view.h*ts); ctx.stroke(); }
-  for (let gy=0;gy<=view.h;gy++){ ctx.beginPath(); ctx.moveTo(0,gy*ts); ctx.lineTo(view.w*ts,gy*ts); ctx.stroke(); }
-
-  dirty.all=false;
 }
 
-export function gatherHere(){
+function drawTiles() {
+  if (!world || !atlas) return;
+  const keep = new Set<string>();
+
+  for (let sy = 0; sy < view.h; sy++) {
+    for (let sx = 0; sx < view.w; sx++) {
+      const x = view.x + sx, y = view.y + sy;
+      const t = state.map.tiles[y]?.[x];
+      const key = `${x},${y}`;
+      const sp = ensureSprite(tilePool, layers.tiles, key);
+
+      const tileName = TILE_NAME[t?.type ?? TileType.WATER] || "water";
+      const tex = atlas.get(tileName);
+      if (tex) { sp.texture = tex; sp.tint = 0xffffff; sp.alpha = 1; }
+      else { sp.texture = Texture.WHITE; sp.tint = FALLBACK[tileName] ?? 0x000000; sp.alpha = 1; }
+
+      sp.x = x * SPRITE_TILE;
+      sp.y = y * SPRITE_TILE;
+      keep.add(key);
+    }
+  }
+  prune(tilePool, layers.tiles, keep);
+}
+
+function drawNodes() {
+  if (!world || !atlas) return;
+  const keep = new Set<string>();
+
+  for (let sy = 0; sy < view.h; sy++) {
+    for (let sx = 0; sx < view.w; sx++) {
+      const x = view.x + sx, y = view.y + sy;
+      const t = state.map.tiles[y]?.[x];
+      if (!t?.node || t.node.charges <= 0) continue;
+
+      const key = `N:${x},${y}`;
+      const sp = ensureSprite(nodePool, layers.nodes, key);
+
+      const candidates = NODE_NAME[t.node.kind] || [];
+      const tex = candidates.length ? atlas.try(...candidates) : null;
+
+      if (tex) { sp.texture = tex; sp.tint = 0xffffff; sp.alpha = 1; }
+      else { sp.texture = Texture.WHITE; sp.tint = FALLBACK.node; sp.alpha = 0.85; }
+
+      sp.x = x * SPRITE_TILE;
+      sp.y = y * SPRITE_TILE;
+      keep.add(key);
+    }
+  }
+  prune(nodePool, layers.nodes, keep);
+}
+
+function drawEntities() {
+  if (!world || !atlas) return;
+  const keep = new Set<string>();
+
+  // Player
+  {
+    const id = "player";
+    let sp = entityPool.get(id);
+    if (!sp) { sp = new Sprite(Texture.WHITE); layers.entities.addChild(sp); entityPool.set(id, sp); }
+    const playerTex = atlas.try("monkey_down_0", "characters.png/monkey_down_0");
+    if (playerTex) { sp.texture = playerTex; sp.tint = 0xffffff; sp.alpha = 1; }
+    else { sp.texture = Texture.WHITE; sp.tint = FALLBACK.player; }
+    sp.width = SPRITE_TILE; sp.height = SPRITE_TILE;
+    sp.x = state.player.x * SPRITE_TILE;
+    sp.y = state.player.y * SPRITE_TILE;
+    sp.zIndex = state.player.y;
+    keep.add(id);
+  }
+
+  // Crabs (if any)
+  for (let i = 0; i < state.entities.length; i++) {
+    const e = state.entities[i];
+    const id = `crab:${i}`;
+    let sp = entityPool.get(id);
+    if (!sp) { sp = new Sprite(Texture.WHITE); layers.entities.addChild(sp); entityPool.set(id, sp); }
+    const crabTex = atlas.try("crab_0", "characters.png/crab_0");
+    if (crabTex) { sp.texture = crabTex; sp.tint = 0xffffff; sp.alpha = 1; }
+    else { sp.texture = Texture.WHITE; sp.tint = FALLBACK.crab; }
+    sp.width = SPRITE_TILE; sp.height = SPRITE_TILE;
+    sp.x = e.x * SPRITE_TILE;
+    sp.y = e.y * SPRITE_TILE;
+    sp.zIndex = e.y;
+    keep.add(id);
+  }
+
+  // Prune despawned
+  for (const [id, sp] of entityPool) {
+    if (!keep.has(id)) {
+      layers.entities.removeChild(sp);
+      sp.destroy();
+      entityPool.delete(id);
+    }
+  }
+}
+
+function drawFrame() {
+  if (!app || !world) return;
+  if (!dirty.all) return;
+
+  centerCamera();
+  resizeRenderer();
+
+  // Position world so (view.x, view.y) is top-left at canvas origin
+  world.position.set(-view.x * SPRITE_TILE, -view.y * SPRITE_TILE);
+
+  drawTiles();
+  drawNodes();
+  drawEntities();
+
+  dirty.all = false;
+}
+
+/** Public API — same names as M0b */
+export function startRenderLoop() {
+  (async () => {
+    await ensurePixi();
+    const step = () => { drawFrame(); requestAnimationFrame(step); };
+    step();
+  })();
+}
+
+export function gatherHere() {
   const t = state.map.tiles[state.player.y][state.player.x];
-  if (!t.node || t.node.charges<=0){ log("Nothing here to gather.","muted"); return; }
-  const yields: Record<string,string> = {
-    palm:"coconut", banana:"banana", vines:"vines", rock:"rock", drift:"wood", shell:"shells", wreck:"scrap"
+  if (!t.node || t.node.charges <= 0) { log("Nothing here to gather.", "muted"); return; }
+  const yields: Record<string, string> = {
+    palm: "coconut", banana: "banana", vines: "vines",
+    rock: "rock", drift: "wood", shell: "shells", wreck: "scrap"
   };
-  const item = yields[t.node.kind];
+  const item = yields[t.node.kind] || t.node.kind;
   t.node.charges -= 1;
-  log(`Gathered ${item}.`,"ok");
+  log(`Gathered ${item}.`, "ok");
   dirty.all = true;
-}
-
-export function startRenderLoop(){
-  const step = () => { draw(); requestAnimationFrame(step); };
-  step();
 }
