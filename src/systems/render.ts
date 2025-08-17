@@ -10,9 +10,7 @@
 // - Fallback tinted rects when an atlas key is missing (no blank tiles, no console errors)
 // - Camera centers on player
 //
-// This module is intentionally defensive about the shape of the game state to avoid
-// coupling. It looks for common fields (map tiles, nodes, player, crabs) but won't crash
-// if some differ; it just draws fewer things.
+// This module is intentionally defensive about the shape of the game state.
 
 import {
   Application,
@@ -22,13 +20,17 @@ import {
   Assets,
   Graphics,
   Ticker,
+  BaseTexture,
+  SCALE_MODES,
 } from 'pixi.js';
 import { Atlas } from '../core/atlas';
+
+// Optional: keep pixels crisp when scaling up 4x
+BaseTexture.defaultOptions.scaleMode = SCALE_MODES.NEAREST;
 
 // ---- Light, defensive imports of config/state ----
 let CONFIG: any = {};
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   CONFIG = (await import('../core/config')).CONFIG ?? {};
 } catch {
   // defaults below
@@ -36,16 +38,15 @@ try {
 
 let STATE_MOD: any = {};
 try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
   STATE_MOD = await import('../core/state');
 } catch {
-  // we'll fallback to window.__mp_state if present
+  // fallback to window.__mp_state if present
 }
 
 // ---- Constants / Defaults ----
 const TILE_SIZE: number =
   (CONFIG?.TILE_SIZE as number) ??
-  (CONFIG?.TILE ?? 16) ??
+  (CONFIG?.TILE as number) ??
   16;
 
 const SCALE: number = (CONFIG?.SCALE as number) ?? 4;
@@ -87,7 +88,6 @@ const F_TINTS = {
 
 // Name mappings per acceptance notes.
 function tileKeyForTileType(t: string | number | undefined): string {
-  // tolerant: accept string TileType or map a number -> unknown
   if (typeof t === 'string') return t;
   return 'unknown';
 }
@@ -115,7 +115,7 @@ function nodeKeyForNodeType(n: string | undefined): string {
 
 function entityKeyFor(type: 'player' | 'crab' | string): string {
   if (type === 'crab') return 'crab';
-  if (type === 'player') return 'monkey'; // likely atlas key
+  if (type === 'player') return 'monkey'; // canonical player key
   return 'unknown';
 }
 
@@ -141,7 +141,6 @@ let started = false;
 
 // ---- Utilities ----
 function baseURL(): string {
-  // Always prefer Vite base, fallback to "/"
   const b = (import.meta as any)?.env?.BASE_URL ?? '/';
   return b.endsWith('/') ? b : b + '/';
 }
@@ -194,7 +193,7 @@ function mapWidth(s: any): number {
     s?.map?.w ??
     s?.width ??
     s?.cols ??
-    VIEW_TILES_W // fallback
+    VIEW_TILES_W
   );
 }
 
@@ -204,7 +203,7 @@ function mapHeight(s: any): number {
     s?.map?.h ??
     s?.height ??
     s?.rows ??
-    VIEW_TILES_H // fallback
+    VIEW_TILES_H
   );
 }
 
@@ -233,10 +232,6 @@ function tileAt(s: any, x: number, y: number): string {
 type NodeLike = { x: number; y: number; type: string; charges?: number };
 
 function listNodes(s: any): NodeLike[] {
-  // Possible shapes:
-  // - s.nodes: Node[]
-  // - s.map.nodes: Node[] or 2D grid
-  // - s.map.nodeGrid: Node-like 2D
   const out: NodeLike[] = [];
   const tryPush = (n: any) => {
     if (!n) return;
@@ -255,7 +250,6 @@ function listNodes(s: any): NodeLike[] {
   if (Array.isArray(s?.map?.nodes)) {
     for (const n of s.map.nodes) tryPush(n);
   }
-  // If node grid exists
   const ngrid = s?.map?.nodeGrid;
   if (Array.isArray(ngrid)) {
     for (let j = 0; j < ngrid.length; j++) {
@@ -332,9 +326,11 @@ async function ensurePixiApp(): Promise<void> {
   app = tmp;
 
   const mount = mountPoint();
+  // Prefer v8 property to avoid deprecation warnings, then fallback.
   const canvas: HTMLCanvasElement =
-    (app.view as HTMLCanvasElement) ?? (app.canvas as HTMLCanvasElement);
-  mount.appendChild(canvas);
+    (app.canvas as HTMLCanvasElement) ??
+    (app.view as HTMLCanvasElement);
+  if (canvas && !canvas.isConnected) mount.appendChild(canvas);
 
   // Stage / layers
   worldC = new Container();
@@ -349,15 +345,18 @@ async function ensurePixiApp(): Promise<void> {
   worldC.addChild(entitiesC);
   app.stage.addChild(worldC);
 
-  // Preload /assets keys the atlas will need (optional hinting)
-  await Assets.addBundle('mp-core', {
-    // These are lazy-loaded by Atlas; this just warms the cache during dev.
-    tiles: `${baseURL()}assets/tiles.png`,
-    props: `${baseURL()}assets/props.png`,
-    structures: `${baseURL()}assets/structures.png`,
-    characters: `${baseURL()}assets/characters.png`,
-    ui: `${baseURL()}assets/ui.png`,
-  }).catch(() => void 0);
+  // Warm the cache for common assets (optional). In Pixi v8, addBundle returns void.
+  try {
+    Assets.addBundle('mp-core', {
+      tiles: `${baseURL()}assets/tiles.png`,
+      props: `${baseURL()}assets/props.png`,
+      structures: `${baseURL()}assets/structures.png`,
+      characters: `${baseURL()}assets/characters.png`,
+      ui: `${baseURL()}assets/ui.png`,
+    });
+  } catch {
+    // Ignore; purely a dev warm-up.
+  }
 }
 
 async function ensureAtlas(): Promise<void> {
@@ -366,7 +365,6 @@ async function ensureAtlas(): Promise<void> {
 }
 
 // Pool a fixed grid of tile sprites (viewport + padding) positioned in world coords.
-// We'll update their textures and positions every camera update.
 function buildTilePool(): void {
   tileSprites.forEach((s) => s.destroy());
   tileSprites = [];
@@ -394,7 +392,6 @@ function centerWorldOn(xTiles: number, yTiles: number): void {
   const camXpx = (xTiles + 0.5) * TILE_SIZE * SCALE;
   const camYpx = (yTiles + 0.5) * TILE_SIZE * SCALE;
 
-  // worldC is scaled, so position is in SCREEN pixels
   worldC.position.set(
     Math.floor(viewWpx * 0.5 - camXpx),
     Math.floor(viewHpx * 0.5 - camYpx),
@@ -470,7 +467,6 @@ function updateNodes(s: any, camX: number, camY: number): void {
 }
 
 function getEntityTextureAndTint(kind: 'player' | 'crab'): { texture: Texture; tint: number } {
-  // Try canonical keys; fallback to alternates; then to tinted rect
   const preferred = entityKeyFor(kind);
   const alternates = kind === 'player' ? ['player', 'monkey'] : ['crab', 'crabs'];
 
@@ -548,10 +544,7 @@ function redrawAll(): void {
   const s = getState();
   const p = playerPos(s);
 
-  // Re-center world on player
   centerWorldOn(p.x, p.y);
-
-  // Update pooled layers
   updateTiles(s, p.x, p.y);
   updateNodes(s, p.x, p.y);
   updateEntities(s);
@@ -560,15 +553,12 @@ function redrawAll(): void {
   lastCamY = p.y;
 }
 
-// Optional cheap change detector
 function needsRedraw(): boolean {
   const s = getState();
   const p = playerPos(s);
 
-  // Redraw if camera center changed
   if (p.x !== lastCamX || p.y !== lastCamY) return true;
 
-  // Redraw if a typical dirty flag is set (best-effort)
   const dirty =
     s?.dirty?.render ||
     s?.dirty?.all ||
@@ -586,7 +576,6 @@ function attachTicker(): void {
       if (needsRedraw()) redrawAll();
     });
   } else {
-    // Fallback: RAF loop
     const loop = () => {
       if (atlas && needsRedraw()) redrawAll();
       requestAnimationFrame(loop);
@@ -602,20 +591,21 @@ export function startRenderLoop(..._args: any[]): void {
   started = true;
 
   (async () => {
-    await ensurePixiApp();
-    await ensureAtlas();
-    buildTilePool();
-    redrawAll();
-    attachTicker();
-  })().catch((err) => {
-    // Never crash the page; log once and render tinted rects anyway.
-    console.error('[render] init failed', err);
-  });
+    try {
+      await ensurePixiApp();
+      await ensureAtlas();
+      buildTilePool();
+      redrawAll();
+      attachTicker();
+    } catch (err) {
+      // Never crash the page; log once and render tinted rects anyway.
+      console.error('[render] init failed', err);
+    }
+  })();
 }
 
 // Small "gather" feedback effect at the player tile.
 // A quick scale+fade ping so the user gets a visual cue.
-// Does not affect game state or determinism.
 export function gatherHere(..._args: any[]): void {
   if (!app || !worldC) return;
 
@@ -652,10 +642,9 @@ export function gatherHere(..._args: any[]): void {
   if (ticker && typeof ticker.add === 'function') {
     ticker.add(step as any);
   } else {
-    // RAF fallback
     const raf = () => {
       step();
-      if (g.destroyed) return;
+      if ((g as any).destroyed) return;
       requestAnimationFrame(raf);
     };
     requestAnimationFrame(raf);
