@@ -1,8 +1,8 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Monkey Pirate: Shipwrecked — Dev (M0b)</title>
+    <title>Monkey Pirate: Shipwrecked — Dev (M1 Pixi)</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <style>
       :root{
@@ -13,7 +13,25 @@
       #top{display:flex;gap:8px;margin-bottom:8px}
       button{background:var(--panel);color:var(--text);border:1px solid #2b3245;border-radius:6px;padding:8px 10px;cursor:pointer}
       button:hover{background:var(--panel2)}
-      #gameCanvas{background:#000;border:1px solid #2b3245;image-rendering:pixelated}
+
+      /* New Pixi mount */
+      #game{
+        background:#000;
+        border:1px solid #2b3245;
+        border-radius:2px;
+        display:block;
+        /* The Pixi canvas will size itself; this keeps the layout stable */
+        /* Optional: uncomment to reserve space
+        min-width:800px;
+        min-height:600px;
+        */
+      }
+      /* Ensure crisp pixels on the canvas the renderer adds */
+      #game canvas{ image-rendering: pixelated; }
+
+      /* Legacy canvas (kept but hidden to avoid breaking old code paths) */
+      #gameCanvas{ display:none; }
+
       #hud{background:var(--panel);border:1px solid #2b3245;border-radius:8px;margin-top:8px;padding:8px}
       .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
       .badge{display:inline-flex;gap:6px;background:var(--panel2);padding:6px 8px;border-radius:6px}
@@ -34,7 +52,13 @@
         <button id="btnLoad">Load</button>
         <button id="btnHelp">Help</button>
       </div>
-      <canvas id="gameCanvas" width="800" height="600" aria-label="Game canvas"></canvas>
+
+      <!-- Pixi mounts here -->
+      <div id="game" role="application" aria-label="Game viewport"></div>
+
+      <!-- Legacy canvas kept (hidden) for compatibility with any leftover queries -->
+      <canvas id="gameCanvas" width="800" height="600" aria-hidden="true"></canvas>
+
       <div id="hud">
         <div class="row">
           <div class="badge"><span class="ico">❤</span> <span id="statHealth">10</span></div>
@@ -44,10 +68,17 @@
           <div class="badge"><span class="ico">📅</span> <span id="statDay">1</span></div>
           <div class="badge"><span class="ico">🌱</span> <span id="statSeed">-</span></div>
         </div>
-        <div id="tip" class="muted">Move with WASD/Arrows · <span class="kbd">G</span> gather · <span class="kbd">Space</span> wait</div>
+        <div id="tip" class="muted">
+          Move with WASD/Arrows · <span class="kbd">G</span> gather · <span class="kbd">Space</span> wait
+        </div>
         <div id="log" aria-live="polite"></div>
       </div>
     </div>
-    <script type="module" src="/src/main.ts"></script>
+
+    <!-- Important: load the Vite client first so TS modules are served correctly -->
+    <script type="module">
+      import '/@vite/client';
+      import '/src/main.ts';
+    </script>
   </body>
 </html>
