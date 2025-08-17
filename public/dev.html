@@ -2,22 +2,89 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta http-equiv="refresh" content="0; url=/dev.html" />
-    <title>Redirecting to Dev Shell…</title>
-    <script>
-      // Respect GH Pages base in dev as well.
-      (function () {
-        var base = location.pathname.indexOf('/monkeypirate/') === 0 ? '/monkeypirate/' : '/';
-        location.replace(base + 'dev.html');
-      })();
-    </script>
+    <title>Monkey Pirate: Shipwrecked — Dev (M1 Pixi)</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root{
+        --bg:#0e0f12; --panel:#151821; --panel2:#1c2230; --text:#e8ecf1; --muted:#9aa5b1; --accent:#42c2ff;
+      }
+      html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:14px/1.3 system-ui,Segoe UI,Roboto}
+      #shell{max-width:1120px;margin:16px auto;padding:8px}
+      #top{display:flex;gap:8px;margin-bottom:8px}
+      button{background:var(--panel);color:var(--text);border:1px solid #2b3245;border-radius:6px;padding:8px 10px;cursor:pointer}
+      button:hover{background:var(--panel2)}
+
+      /* Pixi mount */
+      #game{
+        background:#000;
+        border:1px solid #2b3245;
+        border-radius:2px;
+        display:block;
+      }
+      #game canvas{ image-rendering: pixelated; }
+
+      /* Legacy canvas kept (hidden) for any leftover code paths */
+      #gameCanvas{ display:none; }
+
+      #hud{background:var(--panel);border:1px solid #2b3245;border-radius:8px;margin-top:8px;padding:8px}
+      .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+      .badge{display:inline-flex;gap:6px;background:var(--panel2);padding:6px 8px;border-radius:6px}
+      .ico{min-width:16px;text-align:center}
+      #log{background:var(--panel2);border-radius:6px;margin-top:6px;min-height:64px;max-height:120px;overflow:auto;padding:6px;color:var(--muted)}
+      .kbd{background:#232a3b;border:1px solid #39425a;border-bottom-width:3px;border-radius:4px;padding:0 4px;font-family:monospace}
+      .muted{color:var(--muted)}
+      .ok{color:#7ee787}
+      .warn{color:#ffcc66}
+      .bad{color:#ff6b6b}
+    </style>
   </head>
   <body>
-    Redirecting to the modular dev shell…
-    <a id="link" href="/dev.html">Open dev.html</a>
-    <script>
-      var base = location.pathname.indexOf('/monkeypirate/') === 0 ? '/monkeypirate/' : '/';
-      document.getElementById('link').href = base + 'dev.html';
+    <div id="shell">
+      <div id="top">
+        <button id="btnNew">New Run</button>
+        <button id="btnSave">Save Now</button>
+        <button id="btnLoad">Load</button>
+        <button id="btnHelp">Help</button>
+      </div>
+
+      <!-- Pixi mounts here -->
+      <div id="game" role="application" aria-label="Game viewport"></div>
+
+      <!-- Hidden legacy canvas to avoid breaking old queries -->
+      <canvas id="gameCanvas" width="800" height="600" aria-hidden="true"></canvas>
+
+      <div id="hud">
+        <div class="row">
+          <div class="badge"><span class="ico">❤</span> <span id="statHealth">10</span></div>
+          <div class="badge"><span class="ico">⚡</span> <span id="statStam">10</span></div>
+          <div class="badge"><span class="ico">🍗</span> <span id="statHunger">10</span></div>
+          <div class="badge"><span class="ico">⏱</span> <span id="statTurn">0</span></div>
+          <div class="badge"><span class="ico">📅</span> <span id="statDay">1</span></div>
+          <div class="badge"><span class="ico">🌱</span> <span id="statSeed">-</span></div>
+        </div>
+        <div id="tip" class="muted">
+          Move with WASD/Arrows · <span class="kbd">G</span> gather · <span class="kbd">Space</span> wait
+        </div>
+        <div id="log" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <!-- Load via the configured base so Firefox gets proper JS MIME types -->
+    <script type="module">
+      // Vite dev is configured with base '/monkeypirate/' (vite.config.ts).
+      // When running the dev server, you should open /monkeypirate/dev.html.
+      // This script imports the Vite client and your entry using that base.
+      const BASE = (location.pathname.indexOf('/monkeypirate/') === 0) ? '/monkeypirate/' : '/';
+
+      // In dev, load the Vite client from the same base (prevents MIME-type blocks in Firefox)
+      try {
+        await import(BASE + '@vite/client');
+      } catch (_) {
+        // In a built/static context, @vite/client won't exist—ignore.
+      }
+
+      // Load the app entry through Vite's module pipeline
+      await import(BASE + 'src/main.ts');
     </script>
   </body>
 </html>
