@@ -1,8 +1,8 @@
 // Tiny atlas loader for the custom { tileSize, sheets: { "file.png": { name:[col,row] } } } format.
-// Produces per-name PIXI.Textures from the sheet images.
-// Uses import.meta.env.BASE_URL to resolve /public/assets paths.
+// Compatible with Pixi v7 and v8 (no BaseTexture import).
+// Produces per-name PIXI.Textures from the sheet images using a v7/v8-safe helper.
 
-import { Assets, BaseTexture, Rectangle, Texture } from 'pixi.js';
+import { Assets, Rectangle, Texture } from 'pixi.js';
 
 export type AtlasMap = {
   tileSize: number;
@@ -43,21 +43,15 @@ export class Atlas {
     const sheetEntries = Object.entries(data.sheets || {});
     for (const [fileName, nameMap] of sheetEntries) {
       const sheetUrl = `${assetsBase}${fileName}`;
-
-      // In Pixi v7 Assets.load returns a Texture; in v8, also a Texture.
-      // We'll derive the BaseTexture from it for sub-rect slicing.
+      // Assets.load returns a Texture for image files (v7 & v8)
       const sheetTex = (await Assets.load(sheetUrl)) as Texture;
-      const baseTex: BaseTexture =
-        (sheetTex && (sheetTex.baseTexture as BaseTexture)) ||
-        (Texture.from(sheetUrl).baseTexture as BaseTexture);
 
       for (const [name, [col, row]] of Object.entries(nameMap)) {
         const x = col * atlas.tileSize;
         const y = row * atlas.tileSize;
         const frame = new Rectangle(x, y, atlas.tileSize, atlas.tileSize);
 
-        // v7-compatible constructor; also accepted by v8 types.
-        const sub = new Texture(baseTex, frame);
+        const sub = makeSubTexture(sheetTex, frame);
         atlas.textures.set(name, sub);
       }
     }
@@ -77,4 +71,40 @@ export class Atlas {
   keys(): string[] {
     return [...this.textures.keys()];
   }
+}
+
+/**
+ * Create a sub-texture from a larger sheet texture.
+ * - Pixi v7 path: new Texture(baseTexture, frame)
+ * - Pixi v8 path: new Texture({ source, frame })
+ */
+function makeSubTexture(sheetTex: Texture, frame: Rectangle): Texture {
+  // v7-style: Texture has .baseTexture
+  const baseTex = (sheetTex as any).baseTexture;
+  if (baseTex) {
+    return new (Texture as any)(baseTex, frame);
+  }
+
+  // v8-style: Texture has .source (TextureSource)
+  const source =
+    (sheetTex as any).source ||
+    (sheetTex as any).textureSource ||
+    (sheetTex as any).baseTexture || // last-ditch, if present
+    null;
+
+  if (source) {
+    try {
+      return new (Texture as any)({ source, frame });
+    } catch {
+      // Some environments require dynamic:true when customizing frames
+      try {
+        return new (Texture as any)({ source, frame, dynamic: true });
+      } catch {
+        // fall-through to white texture
+      }
+    }
+  }
+
+  // Fallback white (caller will tint it)
+  return Texture.WHITE;
 }
