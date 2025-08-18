@@ -9,8 +9,6 @@
 // - 16x16 tiles at 4x scale (from CONFIG if provided; otherwise defaults)
 // - Fallback tinted rects when an atlas key is missing (no blank tiles, no console errors)
 // - Camera centers on player
-//
-// This module is intentionally defensive about the shape of the game state.
 
 import {
   Application,
@@ -20,13 +18,8 @@ import {
   Assets,
   Graphics,
   Ticker,
-  BaseTexture,
-  SCALE_MODES,
 } from 'pixi.js';
 import { Atlas } from '../core/atlas';
-
-// Optional: keep pixels crisp when scaling up 4x
-BaseTexture.defaultOptions.scaleMode = SCALE_MODES.NEAREST;
 
 // ---- Light, defensive imports of config/state ----
 let CONFIG: any = {};
@@ -150,10 +143,6 @@ function getState(): any {
   return mod.state ?? mod.getState?.() ?? (globalThis as any).__mp_state ?? {};
 }
 
-function clamp(n: number, a: number, b: number): number {
-  return Math.max(a, Math.min(b, n));
-}
-
 function idForXY(x: number, y: number): string {
   return `${x},${y}`;
 }
@@ -167,6 +156,7 @@ function mountPoint(): HTMLElement {
   );
 }
 
+// Pick a texture if available; otherwise a white rect with a tint.
 function textureOrTintRect(
   key: string,
   type: 'tile' | 'node' | 'entity',
@@ -187,26 +177,6 @@ function textureOrTintRect(
 }
 
 // ---- Map/State accessors (defensive) ----
-function mapWidth(s: any): number {
-  return (
-    s?.map?.width ??
-    s?.map?.w ??
-    s?.width ??
-    s?.cols ??
-    VIEW_TILES_W
-  );
-}
-
-function mapHeight(s: any): number {
-  return (
-    s?.map?.height ??
-    s?.map?.h ??
-    s?.height ??
-    s?.rows ??
-    VIEW_TILES_H
-  );
-}
-
 function tileAt(s: any, x: number, y: number): string {
   const tiles =
     s?.map?.tiles ??
@@ -244,12 +214,8 @@ function listNodes(s: any): NodeLike[] {
     }
   };
 
-  if (Array.isArray(s?.nodes)) {
-    for (const n of s.nodes) tryPush(n);
-  }
-  if (Array.isArray(s?.map?.nodes)) {
-    for (const n of s.map.nodes) tryPush(n);
-  }
+  if (Array.isArray(s?.nodes)) for (const n of s.nodes) tryPush(n);
+  if (Array.isArray(s?.map?.nodes)) for (const n of s.map.nodes) tryPush(n);
   const ngrid = s?.map?.nodeGrid;
   if (Array.isArray(ngrid)) {
     for (let j = 0; j < ngrid.length; j++) {
@@ -355,7 +321,7 @@ async function ensurePixiApp(): Promise<void> {
       ui: `${baseURL()}assets/ui.png`,
     });
   } catch {
-    // Ignore; purely a dev warm-up.
+    // Ignore; dev warm-up only.
   }
 }
 
